@@ -9,8 +9,8 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   bucket: 'photos',
 };
-const VERSION = '1.3.0';
-const COLLS = ['menu', 'customers', 'orders', 'settings'];
+const VERSION = '1.4.0';
+const COLLS = ['menu', 'customers', 'orders', 'settings', 'purchases'];
 const DEFAULT_SETTINGS = { id: 'main', name: 'My kitchen', currency: '¥', deliveryFee: 0, addresses: [] };
 
 /* ---------- tiny helpers ---------- */
@@ -60,7 +60,7 @@ const IDB = (() => {
   let dbp = null;
   function open() {
     if (!dbp) dbp = new Promise((res, rej) => {
-      const r = indexedDB.open('orderdesk', 1);
+      const r = indexedDB.open('orderdesk', 2);
       r.onupgradeneeded = () => {
         const d = r.result;
         for (const s of [...COLLS, 'outbox', 'blobs', 'meta']) if (!d.objectStoreNames.contains(s)) d.createObjectStore(s);
@@ -104,12 +104,12 @@ const ST = { new: 'Active', cooking: 'Active', ready: 'Active', done: 'Active', 
 const PAY = { wechat: 'WeChat Pay', alipay: 'Alipay' };
 const isCancelled = o => o.status === 'cancelled';
 const isUnpaid = o => !isCancelled(o) && !o.paid;
-const M = { menu: new Map(), customers: new Map(), orders: new Map(), settings: new Map() };
+const M = { menu: new Map(), customers: new Map(), orders: new Map(), settings: new Map(), purchases: new Map() };
 const S = {
   ready: false, uid: null, email: '', signedIn: false,
-  menu: [], customers: [], orders: [], settings: clone(DEFAULT_SETTINGS),
+  menu: [], customers: [], orders: [], purchases: [], settings: clone(DEFAULT_SETTINGS),
   loaded: { menu: true, customers: true, orders: true, config: true },
-  view: 'orders', ordFilter: 'all', ordLimit: 60, menuQ: '', menuCat: 'All', custQ: '', pickQ: '', pickCat: 'All',
+  view: 'orders', statMode: 'days', statPick: null, ordFilter: 'all', ordLimit: 60, menuQ: '', menuCat: 'All', custQ: '', pickQ: '', pickCat: 'All',
   draft: null, blobUrls: new Map(), outbox: new Map(),
 };
 function refreshArrays(colls) {
@@ -120,7 +120,8 @@ function refreshArrays(colls) {
 }
 const money = n => {
   n = Number(n) || 0;
-  return (S.settings.currency || '') + (Number.isInteger(n) ? n : n.toFixed(2));
+  const a = Math.abs(n);
+  return (n < 0 ? '−' : '') + (S.settings.currency || '') + (Number.isInteger(a) ? a : a.toFixed(2));
 };
 const newDraft = () => ({ customerId: null, name: '', phone: '', address: '', type: 'delivery', note: '', lines: [] });
 const addrList = () => (Array.isArray(S.settings.addresses) ? S.settings.addresses : []);
@@ -178,8 +179,10 @@ const photoUrl = path => S.blobUrls.get(path) || publicUrl(path);
 const num = v => Number(v) || 0;
 const MAP = {
   menu: {
-    to: r => ({ id: r.id, name: r.name || '', category: r.category || 'Other', description: r.description || '', variants: r.variants || [], photo: r.photo || '', available: r.available !== false, example: !!r.example, deleted: !!r.deleted }),
-    from: x => ({ id: x.id, name: x.name, category: x.category, description: x.description, variants: x.variants || [], photo: x.photo || '', available: x.available !== false, example: !!x.example, deleted: !!x.deleted }),
+    to: r => Object.assign({ id: r.id, name: r.name || '', category: r.category || 'Other', description: r.description || '', variants: r.variants || [], photo: r.photo || '', available: r.available !== false, example: !!r.example, deleted: !!r.deleted },
+      r.winTouched ? { windows: r.windows || [] } : {}),
+    from: x => ({ id: x.id, name: x.name, category: x.category, description: x.description, variants: x.variants || [], photo: x.photo || '', available: x.available !== false, example: !!x.example, deleted: !!x.deleted,
+      windows: Array.isArray(x.windows) ? x.windows : [], winTouched: x.windows !== undefined }),
   },
   customers: {
     // photo is only sent when there is one, so this works even before the photo column exists
@@ -188,9 +191,15 @@ const MAP = {
   },
   orders: {
     to: r => Object.assign({ id: r.id, no: r.no || 0, customer_id: r.customerId || null, customer_name: r.customerName || '', phone: r.phone || '', address: r.address || '', type: r.type || 'delivery', items: r.items || [], subtotal: num(r.subtotal), fee: num(r.fee), total: num(r.total), note: r.note || '', status: r.status || 'new', created_at: toIso(r.createdAt), deleted: !!r.deleted },
-      r.payTouched ? { paid: !!r.paid, pay_method: r.payMethod || '', pay_proof: r.payProof || '', paid_at: r.paidAt ? toIso(r.paidAt) : null } : {}),
+      r.payTouched ? { paid: !!r.paid, pay_method: r.payMethod || '', pay_proof: r.payProof || '', paid_at: r.paidAt ? toIso(r.paidAt) : null } : {},
+      r.slotTouched ? { slot_date: r.slotDate || '', slot: r.slot || '' } : {}),
     from: x => ({ id: x.id, no: x.no, customerId: x.customer_id || null, customerName: x.customer_name, phone: x.phone, address: x.address, type: x.type, items: x.items || [], subtotal: num(x.subtotal), fee: num(x.fee), total: num(x.total), note: x.note, status: x.status, createdAt: toMs(x.created_at), deleted: !!x.deleted,
-      paid: !!x.paid, payMethod: x.pay_method || '', payProof: x.pay_proof || '', paidAt: x.paid_at ? toMs(x.paid_at) : 0, payTouched: x.paid !== undefined }),
+      paid: !!x.paid, payMethod: x.pay_method || '', payProof: x.pay_proof || '', paidAt: x.paid_at ? toMs(x.paid_at) : 0, payTouched: x.paid !== undefined,
+      slotDate: x.slot_date || '', slot: x.slot || '', slotTouched: x.slot !== undefined }),
+  },
+  purchases: {
+    to: r => ({ id: r.id, day: r.day || isoDay(Date.now()), item: r.item || '', qty: num(r.qty), unit: r.unit || '', cost: num(r.cost), note: r.note || '', photos: r.photos || [], created_at: toIso(r.createdAt), deleted: !!r.deleted }),
+    from: x => ({ id: x.id, day: x.day, item: x.item, qty: num(x.qty), unit: x.unit || '', cost: num(x.cost), note: x.note || '', photos: Array.isArray(x.photos) ? x.photos : [], createdAt: toMs(x.created_at), deleted: !!x.deleted }),
   },
   settings: {
     to: r => Object.assign({ id: S.uid, name: r.name || 'My kitchen', currency: r.currency ?? '¥', delivery_fee: num(r.deliveryFee), deleted: false },
@@ -288,6 +297,7 @@ async function pull() {
     let from = since ? new Date(Date.parse(since) - 120000).toISOString() : '1970-01-01T00:00:00Z';
     for (;;) {
       const { data, error } = await sb.from(coll).select('*').gt('updated_at', from).order('updated_at', { ascending: true }).limit(1000);
+      if (error && /^(42P01|PGRST205|PGRST204)$/.test(String(error.code || '')) && coll === 'purchases') break; // table not created yet
       if (error) throw error;
       if (!data || !data.length) break;
       const ops = [];
@@ -408,16 +418,18 @@ const ICONS = {
   new: '<circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/>',
   menu: '<path d="M4 5h16M4 12h16M4 19h10"/>',
   customers: '<circle cx="12" cy="8" r="4"/><path d="M4 21c1-4 4-6 8-6s7 2 8 6"/>',
+  inventory: '<path d="M3 7l9-4 9 4v10l-9 4-9-4z"/><path d="M3 7l9 4 9-4M12 11v10"/>',
+  stats: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
 };
-const NAV = [['new', 'New order'], ['orders', 'Orders'], ['menu', 'Menu'], ['customers', 'Customers']];
+const NAV = [['new', 'New order'], ['orders', 'Orders'], ['menu', 'Menu'], ['customers', 'Customers'], ['inventory', 'Inventory'], ['stats', 'Statistics']];
 function renderNav() {
   const open = S.orders.filter(isUnpaid).length;
   $('#brand').replaceChildren(S.settings.name || 'My kitchen', el('small', { text: 'Order desk' }));
   $('#nav').replaceChildren(...NAV.map(([k, label]) => {
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     svg.setAttribute('viewBox', '0 0 24 24'); svg.innerHTML = ICONS[k];
-    return el('button', { type: 'button', 'aria-current': S.view === k ? 'page' : false, onclick: () => go(k) },
-      svg, label, k === 'orders' && open ? el('span', { class: 'badge', text: open }) : null);
+    return el('button', { type: 'button', 'aria-current': S.view === k ? 'page' : false, 'aria-label': label, title: label, onclick: () => go(k) },
+      svg, el('span', { class: 'nav-lbl', text: label }), k === 'orders' && open ? el('span', { class: 'badge', text: open }) : null);
   }));
   $('#side-sync').replaceChildren(syncChip());
   document.title = (open ? `(${open}) ` : '') + 'Order Desk';
@@ -445,7 +457,7 @@ function render(viewChanged) {
   P.fn = null;
   main.replaceChildren();
   banners(main);
-  ({ orders: viewOrders, menu: viewMenu, customers: viewCustomers })[S.view](main);
+  ({ orders: viewOrders, menu: viewMenu, customers: viewCustomers, inventory: viewInventory, stats: viewStats })[S.view](main);
 }
 const P = { fn: null };
 function banners(root) {
@@ -465,7 +477,7 @@ function icon(paths) {
 }
 function pageHead(title, sub, ...actions) {
   return el('div', { class: 'page-head' },
-    el('div', { class: 'head-title' }, el('h1', { text: title }), sub ? el('div', { class: 'sub', text: sub }) : null),
+    el('div', { class: 'head-title' }, el('h1', {}, ...(Array.isArray(title) ? title : [title])), sub ? el('div', { class: 'sub', text: sub }) : null),
     el('div', { class: 'head-acts' }, syncChip(), ...actions,
       el('button', { class: 'btn gear-m icon-btn', type: 'button', 'aria-label': 'Settings', onclick: () => settingsModal() }, icon('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>'))));
 }
@@ -473,7 +485,7 @@ function tile(label, value, hot) { return el('div', { class: 'tile' + (hot ? ' h
 
 /* ---------- ORDERS ---------- */
 function viewOrders(root) {
-  root.append(pageHead('Orders', new Date().toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' }),
+  root.append(pageHead(['Orders', el('span', { class: 'h-date', text: new Date().toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }) })], '',
     el('button', { class: 'btn primary hide-m', type: 'button', onclick: () => go('new') }, '+ New order')));
   const paidN = S.orders.filter(o => !isCancelled(o) && o.paid).length;
   const unpaidN = S.orders.filter(isUnpaid).length;
@@ -506,6 +518,17 @@ function confirmBtn(label, sure, fn, cls) {
 }
 const setStatus = (o, status) => write(Store.patch('orders', o.id, { status }));
 const orderNo = n => '#' + String(n || 0).padStart(3, '0');
+function dayLabel(day) { // 'YYYY-MM-DD' -> Today / Tomorrow / Sat 10 Oct
+  if (!day) return '';
+  const t = isoDay(Date.now()), tm = isoDay(Date.now() + DAY);
+  if (day === t) return 'Today'; if (day === tm) return 'Tomorrow';
+  const [y, m, d] = day.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+}
+function slotText(o) {
+  if (!o.slot && (!o.slotDate || o.slotDate === isoDay(o.createdAt))) return o.slot ? o.slot : '';
+  return [dayLabel(o.slotDate), o.slot || 'any time'].filter(Boolean).join(' · ');
+}
 const custOf = o => (o.customerId && M.customers.get(o.customerId)) || null;
 function whoAvatar(o, cls) { const c = custOf(o); return avatar({ name: o.customerName || 'Walk-in', photo: c && !c.deleted ? c.photo : '' }, cls); }
 function payPill(o) {
@@ -542,6 +565,7 @@ function ticket(o) {
     el('div', { class: 't-body' },
       el('div', { class: 'who' }, whoAvatar(o, 'sm'), el('span', { class: 'who-nm' }, o.customerName || 'Walk-in', o.phone ? el('small', { text: o.phone }) : null)),
       o.address ? el('div', { class: 'addr', text: o.address }) : null,
+      slotText(o) ? el('div', { class: 'when', text: '🕒 ' + slotText(o) }) : null,
       el('ul', { class: 'lines' }, itemLines(o)),
       o.note ? el('div', { class: 'note', text: o.note }) : null),
     el('div', { class: 't-foot' }, el('span', { class: 't-total', text: money(o.total) }), acts));
@@ -569,7 +593,8 @@ function orderSheet(o0) {
       el('div', { class: 'btns' }, el('button', { class: 'btn pay', type: 'button', onclick: () => payModal(o) }, 'Mark paid')));
   openModal(el('div', { class: 'sheet' },
     el('div', { class: 'od-head' }, el('h2', { text: `Order ${orderNo(o.no)}` }), payPill(o)),
-    el('div', { class: 'sub', text: `${dateShort(o.createdAt)} ${timeStr(o.createdAt)} · ${o.type === 'delivery' ? 'Delivery' : 'Pickup'}` }),
+    el('div', { class: 'sub', text: `Taken ${dateShort(o.createdAt)} ${timeStr(o.createdAt)} · ${o.type === 'delivery' ? 'Delivery' : 'Pickup'}` }),
+    slotText(o) ? el('div', { class: 'when', text: '🕒 ' + slotText(o) }) : null,
     el('div', { class: 'who-head' }, whoAvatar(o, 'big'), el('div', {}, el('b', { text: o.customerName || 'Walk-in' }), o.phone ? el('div', { class: 'sub', text: o.phone }) : null, o.address ? el('div', { class: 'sub', text: o.address }) : null)),
     el('ul', { class: 'lines' }, itemLines(o)),
     el('div', { class: 'sum total' }, el('span', { text: 'Total' }), el('span', { text: money(o.total) })),
@@ -629,7 +654,7 @@ function viewNew(root) {
   N.typeSeg = el('div', { class: 'seg', role: 'group', 'aria-label': 'Order type' });
   N.grid = el('div', { class: 'grid' }); N.chips = el('div', { class: 'chips' });
   N.basket = el('div', { class: 'card basket', id: 'basket' });
-  N.bar = el('button', { class: 'sumbar', type: 'button', hidden: true, onclick: () => N.basket.scrollIntoView({ behavior: 'smooth', block: 'start' }) });
+  N.when = el('div', { class: 'when-pick' });
   N.root = el('div', {},
     pageHead('New order', 'Pick a customer, add items, save.'),
     el('div', { class: 'neworder' },
@@ -637,9 +662,9 @@ function viewNew(root) {
         el('div', { class: 'card' }, el('h2', { text: 'Customer' }),
           el('div', { class: 'row' }, field('o-name', 'Name', 'name', { placeholder: 'Type a name to find a regular' }), field('o-phone', 'Phone', 'phone', { type: 'tel', inputmode: 'tel' })),
           N.suggest, N.known,
-          el('div', { style: 'margin-top:10px;display:flex;flex-direction:column;gap:10px' }, N.typeSeg, N.addrField)),
+          el('div', { style: 'margin-top:10px;display:flex;flex-direction:column;gap:10px' }, N.typeSeg, N.addrField, N.when)),
         el('div', { class: 'card' }, el('h2', { text: 'Menu' }), N.chips, N.grid)),
-      N.basket), N.bar);
+      N.basket));
   root.append(N.root);
   refreshNew();
 }
@@ -734,7 +759,7 @@ function refreshBasket() {
     el('span', { text: d.address ? feeText(addrFee(d.address) || 0) : 'choose address' })) : null;
   N.basket.replaceChildren(
     el('h2', { text: 'Order' }),
-    ...(d.lines.length ? lines : [el('div', { class: 'empty', style: 'padding:18px 10px' }, 'Tap dishes in the menu to add them.')]),
+    ...(d.lines.length ? lines : [el('div', { class: 'basket-empty' })]),
     el('div', { class: 'sum' }, el('span', { text: 'Items' }), el('span', { text: money(t.sub) })),
     feeInput,
     el('div', { class: 'sum total' }, el('span', { text: 'Total' }), el('span', { id: 'b-total', text: money(t.total) })),
@@ -743,10 +768,32 @@ function refreshBasket() {
     el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' },
       el('button', { class: 'btn primary', id: 'b-save', type: 'button', disabled: !d.lines.length, onclick: saveOrder }, 'Save order'),
       el('button', { class: 'btn', type: 'button', onclick: () => { S.draft = newDraft(); $('#main').replaceChildren(); viewNew($('#main')); } }, 'Clear')));
-  // phone: a bar above the tabs showing the running total, tap to jump to the order
-  const n = d.lines.reduce((a, l) => a + l.qty, 0);
-  N.bar.hidden = !n;
-  N.bar.replaceChildren(el('span', { text: `${n} item${n === 1 ? '' : 's'} · ${money(t.total)}` }), el('span', { class: 'go', text: 'Review order ↓' }));
+  drawWhen();
+}
+/* time windows: a dish may list the windows it is served in; the order offers the windows all its dishes share */
+const winLabel = w => `${w.from}–${w.to}`;
+function orderWindows() {
+  const withWin = S.draft.lines.map(l => M.menu.get(l.menuId)).filter(m => m && Array.isArray(m.windows) && m.windows.length);
+  const all = new Map();
+  for (const m of (withWin.length ? withWin : S.menu)) for (const w of (m.windows || [])) all.set(winLabel(w), w);
+  let list = [...all.keys()];
+  if (withWin.length) list = list.filter(lbl => withWin.every(m => m.windows.some(w => winLabel(w) === lbl)));
+  return { list: list.sort(), clash: withWin.length > 0 && !list.length };
+}
+function drawWhen() {
+  const d = S.draft;
+  if (!d.slotDate) d.slotDate = isoDay(Date.now());
+  const { list, clash } = orderWindows();
+  if (d.slot && !list.includes(d.slot)) d.slot = '';
+  const dates = [0, 1, 2, 3, 4, 5, 6].map(i => isoDay(Date.now() + i * DAY));
+  N.when.replaceChildren(el('label', { class: 'lbl', text: d.type === 'delivery' ? 'Delivery time' : 'Pickup time' }),
+    el('div', { class: 'when-row' },
+      el('select', { id: 'o-day', 'aria-label': 'Day', onchange: e => { d.slotDate = e.target.value; } }, dates.map(x => el('option', { value: x, text: dayLabel(x), selected: x === d.slotDate }))),
+      el('select', { id: 'o-slot', 'aria-label': 'Time', onchange: e => { d.slot = e.target.value; } },
+        el('option', { value: '', text: list.length ? 'Any time / ASAP' : 'ASAP (no time windows set)' }),
+        list.map(x => el('option', { value: x, text: x, selected: x === d.slot })))),
+    clash ? el('div', { class: 'sub warn', text: 'These dishes have no time window in common.' }) : null);
+  const day = $('#o-day', N.when); if (day) day.value = d.slotDate;
 }
 async function saveOrder() {
   const d = S.draft;
@@ -773,6 +820,7 @@ async function saveOrder() {
     items: d.lines.map(l => ({ menuId: l.menuId, name: l.name, variant: l.variant, price: l.price, qty: l.qty })),
     subtotal: t.sub, fee: t.fee, total: t.total, note: d.note.trim(), status: 'new', createdAt: now,
   };
+  if (d.slot || (d.slotDate && d.slotDate !== isoDay(now))) Object.assign(order, { slotDate: d.slotDate, slot: d.slot || '', slotTouched: true });
   if (await write(Store.put('orders', order), `Order ${orderNo(no)} saved`)) {
     S.draft = newDraft(); S.ordFilter = 'all'; go('orders');
   } else btn.disabled = false;
@@ -826,7 +874,8 @@ function menuResults(root) {
     root.append(el('div', { class: 'mlist' }, arr.map(m => el('div', { class: 'mrow' + (m.available === false ? ' off' : '') },
       thumb(m, ''),
       el('div', {}, el('div', { class: 'nm', text: m.name }),
-        el('div', { class: 'pr', text: (m.variants || []).map(v => (v.label ? v.label + ' ' : '') + money(v.price)).join(' · ') })),
+        el('div', { class: 'pr', text: (m.variants || []).map(v => (v.label ? v.label + ' ' : '') + money(v.price)).join(' · ') }),
+        (m.windows || []).length ? el('div', { class: 'pr', text: '🕒 ' + m.windows.map(winLabel).join(', ') }) : null),
       el('div', { class: 'ctl' },
         el('button', { class: 'btn small', type: 'button', onclick: () => menuModal(m) }, 'Edit'),
         el('label', { class: 'switch' }, el('input', { type: 'checkbox', checked: m.available !== false, 'aria-label': 'Available', onchange: e => write(Store.patch('menu', m.id, { available: e.target.checked })) }), 'Available'))))));
@@ -850,7 +899,13 @@ function menuModal(item) {
   const m = item ? clone(item) : { name: '', category: '', description: '', variants: [{ label: '', price: '' }], photo: '', available: true };
   if (!m.variants || !m.variants.length) m.variants = [{ label: '', price: '' }];
   const oldPhoto = m.photo || '';
+  m.windows = Array.isArray(m.windows) ? clone(m.windows) : [];
   let newBlob = null, previewUrl = '';
+  const wbox = el('div', { class: 'win-list' });
+  const drawWins = () => wbox.replaceChildren(...m.windows.map((w, i) => el('div', { class: 'win-row' },
+    el('input', { type: 'time', value: w.from, 'aria-label': 'From', oninput: e => { w.from = e.target.value; } }), el('span', { text: 'to' }),
+    el('input', { type: 'time', value: w.to, 'aria-label': 'To', oninput: e => { w.to = e.target.value; } }),
+    el('button', { class: 'x', type: 'button', 'aria-label': 'Remove time window', onclick: () => { m.windows.splice(i, 1); drawWins(); } }, '✕'))));
   const vbox = el('div', { style: 'display:flex;flex-direction:column;gap:8px' });
   const photoBox = el('div', { class: 'photo-edit' });
   const status = el('div', { class: 'sub' });
@@ -891,10 +946,13 @@ function menuModal(item) {
       try { await queuePhoto(photo, newBlob); } catch (err) { return toast('Could not store the photo on this device.', true); }
     }
     const extra = oldPhoto && oldPhoto !== photo ? photoDelOp(oldPhoto) : [];
-    const rec = { id: item ? item.id : newId(), name, category: (m.category || '').trim() || 'Other', description: (m.description || '').trim(), variants, photo, available: m.available !== false, example: false };
+    const windows = m.windows.filter(w => w.from && w.to);
+    if (windows.some(w => w.from >= w.to)) return toast('A time window ends before it starts.', true);
+    const rec = { id: item ? item.id : newId(), name, category: (m.category || '').trim() || 'Other', description: (m.description || '').trim(), variants, photo, available: m.available !== false, example: false,
+      windows, winTouched: !!(windows.length || (item && item.winTouched)) };
     if (await write(Store.put('menu', rec, extra), 'Saved')) closeModal();
   }
-  drawVariants(); drawPhoto();
+  drawVariants(); drawPhoto(); drawWins();
   const sheet = el('div', { class: 'sheet' }, el('h2', { text: item ? 'Edit dish' : 'Add dish' }),
     photoBox, status,
     el('div', { class: 'field' }, el('label', { for: 'f-name', text: 'Name' }), el('input', { id: 'f-name', value: m.name, oninput: e => { m.name = e.target.value; } })),
@@ -902,6 +960,8 @@ function menuModal(item) {
     el('div', { class: 'field' }, el('label', { for: 'f-desc', text: 'Description (optional)' }), el('textarea', { id: 'f-desc', value: m.description || '', oninput: e => { m.description = e.target.value; } })),
     el('div', {}, el('div', { class: 'sub', style: 'margin-bottom:6px', text: 'Prices. Add a row for each size (small, medium, large).' }), vbox,
       el('button', { class: 'link', type: 'button', style: 'margin-top:8px', onclick: () => { m.variants.push({ label: '', price: '' }); drawVariants(); } }, '+ Add another size')),
+    el('div', {}, el('div', { class: 'sub', style: 'margin-bottom:6px', text: 'Time windows (optional). When this dish can be delivered or picked up, e.g. 12:00 to 14:00. Leave empty for any time.' }), wbox,
+      el('button', { class: 'link', type: 'button', style: 'margin-top:8px', onclick: () => { m.windows.push({ from: '12:00', to: '14:00' }); drawWins(); } }, '+ Add time window')),
     el('label', { class: 'switch' }, el('input', { type: 'checkbox', checked: m.available !== false, onchange: e => { m.available = e.target.checked; } }), 'Available today'),
     el('div', { class: 'actions' },
       item ? confirmBtn('Delete dish', 'Delete for good?', async () => { if (await write(Store.remove('menu', item.id, photoDelOp(oldPhoto)), 'Dish deleted')) closeModal(); }, 'danger left') : null,
@@ -978,6 +1038,151 @@ function repeatLast(c) {
   }
   go('new');
   toast(skipped ? `Repeated with ${skipped} item${skipped === 1 ? '' : 's'} no longer on the menu left out.` : 'Last order copied. Check it and save.');
+}
+
+/* ---------- INVENTORY: what was bought, when, how much ---------- */
+const UNITS = ['kg', 'g', 'L', 'ml', 'pcs', 'pack', 'box', 'bag', 'dozen'];
+const monthKey = day => day.slice(0, 7);
+const monthLabel = key => { const [y, m] = key.split('-').map(Number); return new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' }); };
+function viewInventory(root) {
+  root.append(pageHead('Inventory', 'What you bought, when, and for how much.',
+    el('button', { class: 'btn primary', type: 'button', onclick: () => purchaseModal(null) }, '+ Add', el('span', { class: 'hide-m', text: ' purchase' }))));
+  const list = S.purchases.slice().sort((a, b) => (b.day || '').localeCompare(a.day || '') || (b.createdAt || 0) - (a.createdAt || 0));
+  if (!list.length) { root.append(el('div', { class: 'empty' }, el('b', { text: 'No purchases yet' }), 'Add what you buy (meat, flour, gas…) with the cost and a photo of the receipt.')); return; }
+  const thisMonth = monthKey(isoDay(Date.now()));
+  const mSpent = list.filter(p => monthKey(p.day) === thisMonth).reduce((a, p) => a + num(p.cost), 0);
+  root.append(el('div', { class: 'sumline' }, el('span', { text: monthLabel(thisMonth) }), el('b', { text: money(mSpent) + ' spent' })));
+  const byDay = new Map();
+  for (const p of list) { if (!byDay.has(p.day)) byDay.set(p.day, []); byDay.get(p.day).push(p); }
+  for (const [day, arr] of byDay) {
+    root.append(el('h2', { class: 'cat-title' }, dayLabel(day), el('span', { text: money(arr.reduce((a, p) => a + num(p.cost), 0)) })));
+    root.append(el('div', { class: 'plist' }, arr.map(p => el('button', { class: 'prow', type: 'button', onclick: () => purchaseModal(p) },
+      el('div', { class: 'p-main' }, el('div', { class: 'nm', text: p.item || 'Item' }),
+        el('div', { class: 'meta', text: [p.qty ? `${p.qty} ${p.unit || ''}`.trim() : '', p.note].filter(Boolean).join(' · ') })),
+      (p.photos || []).length ? el('span', { class: 'tag', text: '📷 ' + p.photos.length }) : null,
+      el('b', { class: 'p-cost', text: money(p.cost) })))));
+  }
+}
+function purchaseModal(p0) {
+  const p = p0 ? clone(p0) : { day: isoDay(Date.now()), item: '', qty: '', unit: '', cost: '', note: '', photos: [] };
+  const keep = (p.photos || []).slice(); const added = []; // {blob, url}
+  const shots = el('div', { class: 'shots' });
+  async function drawShots() {
+    const items = [];
+    for (const [i, path] of keep.entries()) {
+      const src = await receiptSrc(path);
+      items.push(el('div', { class: 'shot' }, src ? el('a', { href: src, target: '_blank', rel: 'noopener' }, el('img', { src, alt: 'Receipt' })) : el('div', { class: 'ph', text: '🧾' }),
+        el('button', { class: 'x', type: 'button', 'aria-label': 'Remove picture', onclick: () => { keep.splice(i, 1); drawShots(); } }, '✕')));
+    }
+    added.forEach((a, i) => items.push(el('div', { class: 'shot' }, el('img', { src: a.url, alt: 'New receipt' }),
+      el('button', { class: 'x', type: 'button', 'aria-label': 'Remove picture', onclick: () => { added.splice(i, 1); drawShots(); } }, '✕'))));
+    items.push(el('label', { class: 'shot add' }, '+ Picture', el('input', { type: 'file', accept: 'image/*', multiple: true, style: 'display:none', onchange: async e => {
+      for (const f of [...(e.target.files || [])]) { try { const b = await shrinkPhoto(f, 1600, false); added.push({ blob: b, url: URL.createObjectURL(b) }); } catch (_) { toast('Could not read one of the pictures.', true); } }
+      drawShots();
+    } })));
+    shots.replaceChildren(...items);
+  }
+  const items = [...new Set(S.purchases.map(x => x.item).filter(Boolean))];
+  const f = (id, label, key, attrs) => el('div', { class: 'field' }, el('label', { for: id, text: label }), el('input', Object.assign({ id, value: p[key] ?? '', oninput: e => { p[key] = e.target.value; } }, attrs)));
+  async function save() {
+    const item = (p.item || '').trim();
+    if (!item) return toast('What did you buy?', true);
+    if (p.cost === '' || !Number.isFinite(Number(p.cost))) return toast('Add how much it cost.', true);
+    const photos = keep.slice();
+    for (const a of added) { const path = `${S.uid}/receipt-${newId()}.jpg`; try { await queuePhoto(path, a.blob); photos.push(path); } catch (_) { return toast('Could not store a picture on this device.', true); } }
+    const removed = (p0 && p0.photos || []).filter(x => !photos.includes(x));
+    const rec = { id: p0 ? p0.id : newId(), day: p.day || isoDay(Date.now()), item, qty: num(p.qty), unit: (p.unit || '').trim(), cost: num(p.cost), note: (p.note || '').trim(), photos, createdAt: p0 ? p0.createdAt : Date.now() };
+    if (await write(Store.put('purchases', rec, removed.flatMap(photoDelOp)), 'Saved')) closeModal();
+  }
+  drawShots();
+  openModal(el('div', { class: 'sheet' }, el('h2', { text: p0 ? 'Edit purchase' : 'Add purchase' }),
+    f('p-day', 'Date', 'day', { type: 'date' }),
+    el('div', { class: 'field' }, el('label', { for: 'p-item', text: 'Item' }), el('input', { id: 'p-item', list: 'p-items', value: p.item, placeholder: 'Chicken, flour, cooking gas…', oninput: e => { p.item = e.target.value; } }),
+      el('datalist', { id: 'p-items' }, items.map(x => el('option', { value: x })))),
+    el('div', { class: 'row' }, f('p-qty', 'Quantity', 'qty', { type: 'number', inputmode: 'decimal', min: '0', step: 'any' }),
+      el('div', { class: 'field' }, el('label', { for: 'p-unit', text: 'Unit' }), el('input', { id: 'p-unit', list: 'p-units', value: p.unit, placeholder: 'kg, pcs…', oninput: e => { p.unit = e.target.value; } }),
+        el('datalist', { id: 'p-units' }, UNITS.map(x => el('option', { value: x }))))),
+    f('p-cost', `Total cost (${S.settings.currency || ''})`, 'cost', { type: 'number', inputmode: 'decimal', min: '0', step: 'any' }),
+    f('p-note', 'Note (shop, who paid…)', 'note'),
+    el('div', { class: 'field' }, el('label', { text: 'Receipt / screenshot pictures' }), shots),
+    el('div', { class: 'actions' },
+      p0 ? confirmBtn('Delete', 'Delete for good?', async () => { if (await write(Store.remove('purchases', p0.id, (p0.photos || []).flatMap(photoDelOp)), 'Deleted')) closeModal(); }, 'danger left') : null,
+      el('button', { class: 'btn', type: 'button', onclick: closeModal }, 'Cancel'),
+      el('button', { class: 'btn primary', type: 'button', id: 'p-save', onclick: save }, 'Save'))));
+}
+
+/* ---------- STATISTICS: sales vs spending by day or month ---------- */
+function statRows(mode) {
+  const key = mode === 'months' ? (d => d.slice(0, 7)) : (d => d);
+  const rows = new Map();
+  const get = k => { if (!rows.has(k)) rows.set(k, { k, orders: 0, sales: 0, unpaid: 0, spent: 0 }); return rows.get(k); };
+  for (const o of S.orders) { if (isCancelled(o)) continue; const r = get(key(isoDay(o.createdAt))); r.orders++; r.sales += num(o.total); if (!o.paid) r.unpaid += num(o.total); }
+  for (const p of S.purchases) { if (p.day) get(key(p.day)).spent += num(p.cost); }
+  return rows;
+}
+function periods(mode) { // the last 14 days or 12 months, oldest first
+  const out = [];
+  if (mode === 'months') { const d = new Date(); d.setDate(1); for (let i = 11; i >= 0; i--) { const x = new Date(d.getFullYear(), d.getMonth() - i, 1); out.push(x.getFullYear() + '-' + pad(x.getMonth() + 1)); } }
+  else for (let i = 13; i >= 0; i--) out.push(isoDay(Date.now() - i * DAY));
+  return out;
+}
+const periodLabel = (mode, k) => mode === 'months' ? new Date(+k.slice(0, 4), +k.slice(5, 7) - 1, 1).toLocaleDateString(undefined, { month: 'short' }) : String(+k.slice(8, 10));
+const periodLong = (mode, k) => mode === 'months' ? monthLabel(k) : dayLabel(k);
+function viewStats(root) {
+  const mode = S.statMode;
+  root.append(pageHead('Statistics', 'Sales from orders against what you spent.'));
+  root.append(el('div', { class: 'seg', role: 'group', 'aria-label': 'Group by', style: 'margin-bottom:12px' },
+    [['days', 'Days'], ['months', 'Months']].map(([k, l]) => el('button', { type: 'button', 'aria-pressed': mode === k, onclick: () => { S.statMode = k; S.statPick = null; render(true); } }, l))));
+  const rows = statRows(mode), ps = periods(mode);
+  const data = ps.map(k => rows.get(k) || { k, orders: 0, sales: 0, unpaid: 0, spent: 0 });
+  const cur = data[data.length - 1];
+  // headline for the current day/month: plain numbers, no tiles
+  root.append(el('div', { class: 'headline' },
+    el('span', { class: 'sub', text: mode === 'months' ? 'This month' : 'Today' }),
+    el('span', {}, el('b', { text: money(cur.sales) }), ' sales'), el('span', {}, el('b', { text: money(cur.spent) }), ' spent'),
+    el('span', {}, el('b', { class: cur.sales - cur.spent < 0 ? 'neg' : '', text: money(cur.sales - cur.spent) }), ' net')));
+  root.append(chart(mode, data));
+  // table: every period that has something, newest first
+  const all = [...rows.values()].sort((a, b) => b.k.localeCompare(a.k)).slice(0, mode === 'months' ? 24 : 60);
+  if (!all.length) { root.append(el('div', { class: 'empty' }, el('b', { text: 'Nothing to show yet' }), 'Orders and purchases will appear here.')); return; }
+  root.append(el('div', { class: 'table-wrap' }, el('table', { class: 'stat-table' },
+    el('thead', {}, el('tr', {}, ['', 'Orders', 'Sales', 'Spent', 'Net'].map(h => el('th', { text: h })))),
+    el('tbody', {}, all.map(r => el('tr', { class: S.statPick === r.k ? 'pick' : '' },
+      el('td', {}, periodLong(mode, r.k)), el('td', { text: r.orders }),
+      el('td', {}, money(r.sales), r.unpaid ? el('small', { text: ` (${money(r.unpaid)} unpaid)` }) : null),
+      el('td', { text: money(r.spent) }), el('td', { class: r.sales - r.spent < 0 ? 'neg' : '', text: money(r.sales - r.spent) })))))));
+}
+function chart(mode, data) {
+  // draw at the real on-screen width so the axis text stays readable on a phone
+  const W = Math.round(Math.max(300, Math.min(760, (($('#main') || document.body).clientWidth || 640) - 54))), H = 200, padL = 44, padB = 22, padT = 10, padR = 6;
+  const max = Math.max(1, ...data.map(d => Math.max(d.sales, d.spent)));
+  const step = Math.pow(10, Math.floor(Math.log10(max))); const top = Math.ceil(max / step) * step;
+  const y = v => padT + (H - padT - padB) * (1 - v / top);
+  const gw = (W - padL - padR) / data.length, bw = Math.max(3, Math.min(14, gw / 2 - 3));
+  const NS = 'http://www.w3.org/2000/svg';
+  const mk = (tag, attrs, text) => { const e = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); if (text != null) e.textContent = text; return e; };
+  const svg = mk('svg', { viewBox: `0 0 ${W} ${H}`, class: 'chart', role: 'img', 'aria-label': `Sales and spending, last ${data.length} ${mode}` });
+  for (let i = 0; i <= 2; i++) { const v = top * i / 2, yy = y(v); svg.append(mk('line', { x1: padL, x2: W - padR, y1: yy, y2: yy, class: 'grid' })); svg.append(mk('text', { x: padL - 6, y: yy + 4, class: 'ax', 'text-anchor': 'end' }, i ? money(v) : '0')); }
+  const info = el('div', { class: 'chart-info', text: 'Tap a bar to see that ' + (mode === 'months' ? 'month' : 'day') + '.' });
+  const bar = (x, v, cls) => { const h = Math.max(0, y(0) - y(v)); if (!h) return null; const r = Math.min(4, bw / 2, h);
+    return mk('path', { d: `M${x},${y(0)} v${-(h - r)} q0,${-r} ${r},${-r} h${bw - 2 * r} q${r},0 ${r},${r} v${h - r} z`, class: cls }); };
+  data.forEach((d, i) => {
+    const gx = padL + i * gw, cx = gx + gw / 2;
+    const g = mk('g', { class: 'grp' + (S.statPick === d.k ? ' pick' : ''), tabindex: '0' });
+    g.append(mk('rect', { x: gx, y: padT, width: gw, height: H - padT - padB, class: 'hit' }));
+    const a = bar(cx - bw - 1, d.sales, 'b-sales'), b = bar(cx + 1, d.spent, 'b-spent');
+    if (a) g.append(a); if (b) g.append(b);
+    const every = Math.ceil(data.length / Math.max(4, Math.floor((W - padL) / 34)));
+    if ((data.length - 1 - i) % every === 0) g.append(mk('text', { x: cx, y: H - 6, class: 'ax', 'text-anchor': 'middle' }, periodLabel(mode, d.k)));
+    const show = () => { S.statPick = d.k; info.replaceChildren(el('b', { text: periodLong(mode, d.k) + ': ' }), `${money(d.sales)} sales · ${money(d.spent)} spent · ${money(d.sales - d.spent)} net · ${d.orders} order${d.orders === 1 ? '' : 's'}`);
+      svg.querySelectorAll('.grp.pick').forEach(n => n.classList.remove('pick')); g.classList.add('pick'); };
+    g.addEventListener('click', show); g.addEventListener('mouseenter', show); g.addEventListener('keydown', e => { if (e.key === 'Enter') show(); });
+    svg.append(g);
+  });
+  svg.append(mk('line', { x1: padL, x2: W - padR, y1: y(0), y2: y(0), class: 'base' }));
+  return el('div', { class: 'card chart-card' },
+    el('div', { class: 'legend' }, el('span', {}, el('i', { class: 'k-sales' }), 'Sales'), el('span', {}, el('i', { class: 'k-spent' }), 'Spent')),
+    svg, info);
 }
 
 /* ---------- files: save / share ---------- */
@@ -1080,6 +1285,9 @@ function excelBlob() {
     { name: 'Customers', widths: [20, 15, 30, 25, 8, 10, 11],
       rows: [['Name', 'Phone', 'Address', 'Notes', 'Orders', 'Spent', 'Last order'],
         ...S.customers.map(c => { const x = st.get(c.id); return [c.name, c.phone, c.address, c.notes, x ? x.n : 0, x ? x.spent : 0, x ? { date: x.last } : '']; })] },
+    { name: 'Purchases', widths: [11, 24, 8, 8, 10, 30, 8],
+      rows: [['Date', 'Item', 'Qty', 'Unit', 'Cost', 'Note', 'Pictures'],
+        ...S.purchases.slice().sort((a, b) => (a.day || '').localeCompare(b.day || '')).map(p => [p.day, p.item, num(p.qty), p.unit, num(p.cost), p.note, (p.photos || []).length])] },
     { name: 'Menu', widths: [14, 26, 10, 8, 10, 30],
       rows: [['Category', 'Dish', 'Size', 'Price', 'Available', 'Description'],
         ...sortedMenu().flatMap(m => (m.variants || []).map(v => [m.category, m.name, v.label || '', num(v.price), m.available === false ? 'No' : 'Yes', m.description || '']))] },
@@ -1120,13 +1328,13 @@ async function saveBackup() {
     const strip = arr => arr.map(stripV);
     const photos = {};
     let missing = 0;
-    const paths = [...S.menu.map(m => m.photo), ...S.customers.map(c => c.photo), ...S.orders.map(o => o.payProof)].filter(Boolean);
+    const paths = [...S.menu.map(m => m.photo), ...S.customers.map(c => c.photo), ...S.orders.map(o => o.payProof), ...S.purchases.flatMap(p => p.photos || [])].filter(Boolean);
     for (const path of new Set(paths)) {
       const p = await photoBytes(path);
       if (p) photos[path] = { type: p.type, data: b64(p.data) }; else missing++;
     }
     const data = { app: 'orderdesk', version: 1, exportedAt: new Date().toISOString(),
-      settings: stripV(S.settings), menu: strip(S.menu), customers: strip(S.customers), orders: strip(S.orders), photos };
+      settings: stripV(S.settings), menu: strip(S.menu), customers: strip(S.customers), orders: strip(S.orders), purchases: strip(S.purchases), photos };
     const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
     if (await deliverFile(`orderdesk-backup-${isoDay(Date.now())}.json`, blob)) {
       try { localStorage.setItem('od-backup-at', String(Date.now())); } catch (_) { /* ignore */ }
@@ -1143,7 +1351,7 @@ async function restoreBackup() {
   if (!data || data.app !== 'orderdesk') return toast('That file is not an Order Desk backup.', true);
   const n = k => (Array.isArray(data[k]) ? data[k].length : 0);
   openModal(el('div', { class: 'sheet' }, el('h2', { text: 'Restore backup?' }),
-    el('p', { text: `From ${new Date(data.exportedAt).toLocaleString()}: ${n('orders')} orders, ${n('customers')} customers, ${n('menu')} dishes.` }),
+    el('p', { text: `From ${new Date(data.exportedAt).toLocaleString()}: ${n('orders')} orders, ${n('customers')} customers, ${n('menu')} dishes, ${n('purchases')} purchases.` }),
     el('p', { class: 'sub', text: 'Records in the file are added back, and replace the same records here. Nothing else is deleted. Restored records are then uploaded.' }),
     el('div', { class: 'actions' }, el('button', { class: 'btn', type: 'button', onclick: closeModal }, 'Cancel'),
       el('button', { class: 'btn primary', type: 'button', onclick: async () => { closeModal(); await doRestore(data); } }, 'Restore'))));
@@ -1159,11 +1367,12 @@ async function doRestore(data) {
       await queuePhoto(np, new Blob([bytes], { type: p.type }));
     }
     let count = 0;
-    for (const coll of ['menu', 'customers', 'orders']) {
+    for (const coll of ['menu', 'customers', 'orders', 'purchases']) {
       for (const r of data[coll] || []) {
         if (!r || !r.id) continue;
         const rec = Object.assign({}, r); delete rec._v;
         if ((coll === 'menu' || coll === 'customers') && rec.photo) rec.photo = remap.get(rec.photo) || (rec.photo.startsWith(S.uid + '/') ? rec.photo : '');
+        if (coll === 'purchases') rec.photos = (rec.photos || []).map(x => remap.get(x) || (String(x).startsWith(S.uid + '/') ? x : '')).filter(Boolean);
         if (coll === 'orders' && rec.payProof) { rec.payProof = remap.get(rec.payProof) || (rec.payProof.startsWith(S.uid + '/') ? rec.payProof : ''); rec.payTouched = true; }
         await Store.put(coll, rec); count++;
       }
