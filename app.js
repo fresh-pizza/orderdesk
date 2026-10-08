@@ -9,7 +9,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   bucket: 'photos',
 };
-const VERSION = '1.0.2';
+const VERSION = '1.1.0';
 const COLLS = ['menu', 'customers', 'orders', 'settings'];
 const DEFAULT_SETTINGS = { id: 'main', name: 'My kitchen', currency: '¥', deliveryFee: 0 };
 
@@ -311,7 +311,7 @@ function syncChip() {
   else if (Sync.state === 'offline') { cls += ' off'; txt = n ? `Offline · ${n} to upload` : 'Offline · all saved here'; }
   else if (Sync.state === 'error') { cls += ' err'; txt = 'Sync problem' + (n ? ` · ${n} waiting` : ''); }
   else if (n) { cls += ' busy'; txt = `${n} to upload`; }
-  else txt = Sync.lastOk ? 'Synced ' + timeStr(Sync.lastOk) : 'Synced';
+  else txt = ['Synced', Sync.lastOk ? el('span', { class: 'hide-m', text: ' ' + timeStr(Sync.lastOk) }) : null];
   return el('button', { class: cls, type: 'button', title: Sync.err || 'Tap to sync now', onclick: () => {
     if (Sync.state === 'error' && Sync.err) toast('Sync: ' + Sync.err, true);
     Sync.soon(0);
@@ -424,23 +424,28 @@ function banners(root) {
     el('button', { class: 'btn small', type: 'button', onclick: () => showLogin(true) }, 'Sign in')));
   if (S.updateReady) root.append(el('div', { class: 'banner' }, el('span', { text: 'A new version of Order Desk is ready.' }),
     el('button', { class: 'btn small primary', type: 'button', onclick: applyUpdate }, 'Update now')));
-  if (showInstallHint()) root.append(el('div', { class: 'banner' }, el('span', { text: 'Install this app: tap the Share button, then "Add to Home Screen". It then opens full-screen and keeps your data safer.' }),
-    el('button', { class: 'btn small', type: 'button', onclick: () => { try { localStorage.setItem('od-hint', '1'); } catch (_) { /* ignore */ } render(true); } }, 'Got it')));
+  if (showInstallHint()) root.append(el('div', { class: 'banner slim' }, el('span', { text: 'Install: tap Share, then "Add to Home Screen".' }),
+    el('button', { class: 'x', type: 'button', 'aria-label': 'Hide', onclick: () => { try { localStorage.setItem('od-hint', '1'); } catch (_) { /* ignore */ } render(true); } }, '✕')));
   const days = backupAgeDays();
   if (S.orders.length >= 10 && days >= 7) root.append(el('div', { class: 'banner' }, el('span', { text: days === Infinity ? 'You have not saved a backup file yet.' : `Last backup file was ${days} days ago.` }),
     el('button', { class: 'btn small', type: 'button', onclick: saveBackup }, 'Back up now')));
 }
+function icon(paths) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('aria-hidden', 'true'); svg.innerHTML = paths; return svg;
+}
 function pageHead(title, sub, ...actions) {
   return el('div', { class: 'page-head' },
-    el('div', {}, el('h1', { text: title }), sub ? el('div', { class: 'sub', text: sub }) : null),
-    el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;align-items:center' }, syncChip(), ...actions, el('button', { class: 'btn gear-m', type: 'button', onclick: () => settingsModal() }, 'Settings')));
+    el('div', { class: 'head-title' }, el('h1', { text: title }), sub ? el('div', { class: 'sub', text: sub }) : null),
+    el('div', { class: 'head-acts' }, syncChip(), ...actions,
+      el('button', { class: 'btn gear-m icon-btn', type: 'button', 'aria-label': 'Settings', onclick: () => settingsModal() }, icon('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>'))));
 }
 function tile(label, value, hot) { return el('div', { class: 'tile' + (hot ? ' hot' : '') }, el('b', { text: value }), el('span', { text: label })); }
 
 /* ---------- ORDERS ---------- */
 function viewOrders(root) {
   root.append(pageHead('Orders', new Date().toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' }),
-    el('button', { class: 'btn primary', type: 'button', onclick: () => go('new') }, '+ New order')));
+    el('button', { class: 'btn primary hide-m', type: 'button', onclick: () => go('new') }, '+ New order')));
   const t0 = startOfDay(Date.now());
   const today = S.orders.filter(o => o.createdAt >= t0 && o.status !== 'cancelled');
   const openN = S.orders.filter(o => OPEN.includes(o.status)).length;
@@ -511,7 +516,8 @@ function viewNew(root) {
   N.suggest = el('div'); N.known = el('div'); N.addrField = field('o-addr', 'Address', 'address');
   N.typeSeg = el('div', { class: 'seg', role: 'group', 'aria-label': 'Order type' });
   N.grid = el('div', { class: 'grid' }); N.chips = el('div', { class: 'chips' });
-  N.basket = el('div', { class: 'card basket' });
+  N.basket = el('div', { class: 'card basket', id: 'basket' });
+  N.bar = el('button', { class: 'sumbar', type: 'button', hidden: true, onclick: () => N.basket.scrollIntoView({ behavior: 'smooth', block: 'start' }) });
   N.search = el('input', { id: 'o-q', type: 'search', 'aria-label': 'Search the menu', placeholder: 'Search the menu', value: S.pickQ, oninput: e => { S.pickQ = e.target.value; refreshGrid(); } });
   N.root = el('div', {},
     pageHead('New order', 'Pick a customer, add items, save.'),
@@ -523,7 +529,7 @@ function viewNew(root) {
           el('div', { style: 'margin-top:10px;display:flex;flex-direction:column;gap:10px' }, N.typeSeg, N.addrField)),
         el('div', { class: 'card' }, el('h2', { text: 'Menu' }),
           el('div', { class: 'field', style: 'margin-bottom:10px' }, N.search), N.chips, N.grid)),
-      N.basket));
+      N.basket), N.bar);
   root.append(N.root);
   refreshNew();
 }
@@ -562,8 +568,11 @@ function refreshGrid() {
   const q = S.pickQ.trim().toLowerCase();
   const items = sortedMenu().filter(m => (S.pickCat === 'All' || (m.category || 'Other') === S.pickCat) && (!q || (m.name || '').toLowerCase().includes(q)));
   if (!items.length) { N.grid.replaceChildren(el('div', { class: 'empty' }, el('b', { text: S.menu.length ? 'No match' : 'The menu is empty' }), S.menu.length ? 'Try another word or category.' : 'Add dishes in the Menu section first.')); return; }
-  N.grid.replaceChildren(...items.map(m => el('button', { class: 'mi', type: 'button', disabled: m.available === false, onclick: () => addItem(m) },
-    thumb(m), el('div', { class: 'info' }, el('b', { text: m.name }), el('span', { text: m.available === false ? 'Not available' : priceText(m) })))));
+  const inBasket = new Map();
+  for (const l of S.draft.lines) inBasket.set(l.menuId, (inBasket.get(l.menuId) || 0) + l.qty);
+  N.grid.replaceChildren(...items.map(m => el('button', { class: 'mi' + (inBasket.has(m.id) ? ' picked' : ''), type: 'button', disabled: m.available === false, onclick: () => addItem(m) },
+    thumb(m), el('div', { class: 'info' }, el('b', { text: m.name }), el('span', { text: m.available === false ? 'Not available' : priceText(m) })),
+    inBasket.has(m.id) ? el('span', { class: 'cnt', text: '×' + inBasket.get(m.id) }) : el('span', { class: 'plus', 'aria-hidden': 'true', text: '+' }))));
 }
 function addItem(m) {
   const vs = m.variants && m.variants.length ? m.variants : [{ label: '', price: 0 }];
@@ -578,7 +587,7 @@ function addLine(m, v) {
   const lines = S.draft.lines, label = v.label || '';
   const ex = lines.find(l => l.menuId === m.id && l.variant === label);
   if (ex) ex.qty++; else lines.push({ menuId: m.id, name: m.name, variant: label, price: Number(v.price) || 0, qty: 1 });
-  refreshBasket();
+  refreshBasket(); refreshGrid();
 }
 function totals() {
   const d = S.draft, sub = d.lines.reduce((a, l) => a + l.price * l.qty, 0);
@@ -591,11 +600,11 @@ function refreshBasket() {
     el('div', { class: 'nm' }, l.name, l.variant ? el('small', { text: ' · ' + l.variant }) : null),
     el('div', { class: 'pr', text: money(l.price * l.qty) }),
     el('div', { class: 'qty' },
-      el('button', { type: 'button', 'aria-label': 'One less', onclick: () => { l.qty--; if (l.qty <= 0) d.lines.splice(i, 1); refreshBasket(); } }, '−'),
+      el('button', { type: 'button', 'aria-label': 'One less', onclick: () => { l.qty--; if (l.qty <= 0) d.lines.splice(i, 1); refreshBasket(); refreshGrid(); } }, '−'),
       el('span', { text: l.qty }),
-      el('button', { type: 'button', 'aria-label': 'One more', onclick: () => { l.qty++; refreshBasket(); } }, '+')),
-    el('button', { class: 'link', type: 'button', style: 'justify-self:end', onclick: () => { d.lines.splice(i, 1); refreshBasket(); } }, 'Remove')));
-  const feeInput = d.type === 'delivery' ? el('div', { class: 'field', style: 'margin-top:8px' }, el('label', { for: 'o-fee', text: 'Delivery fee' }),
+      el('button', { type: 'button', 'aria-label': 'One more', onclick: () => { l.qty++; refreshBasket(); refreshGrid(); } }, '+')),
+    el('button', { class: 'link', type: 'button', style: 'justify-self:end', onclick: () => { d.lines.splice(i, 1); refreshBasket(); refreshGrid(); } }, 'Remove')));
+  const feeInput = d.type === 'delivery' ? el('div', { class: 'field fee-row' }, el('label', { for: 'o-fee', text: 'Delivery fee' }),
     el('input', { id: 'o-fee', type: 'number', inputmode: 'decimal', min: '0', step: '0.5', value: d.fee, oninput: e => { d.fee = e.target.value; $('#b-total').textContent = money(totals().total); } })) : null;
   N.basket.replaceChildren(
     el('h2', { text: 'Order' }),
@@ -608,6 +617,10 @@ function refreshBasket() {
     el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' },
       el('button', { class: 'btn primary', id: 'b-save', type: 'button', disabled: !d.lines.length, onclick: saveOrder }, 'Save order'),
       el('button', { class: 'btn', type: 'button', onclick: () => { S.draft = newDraft(); $('#main').replaceChildren(); viewNew($('#main')); } }, 'Clear')));
+  // phone: a bar above the tabs showing the running total, tap to jump to the order
+  const n = d.lines.reduce((a, l) => a + l.qty, 0);
+  N.bar.hidden = !n;
+  N.bar.replaceChildren(el('span', { text: `${n} item${n === 1 ? '' : 's'} · ${money(t.total)}` }), el('span', { class: 'go', text: 'Review order ↓' }));
 }
 async function saveOrder() {
   const d = S.draft;
@@ -657,9 +670,9 @@ async function loadSamples() {
 }
 function viewMenu(root) {
   root.append(pageHead('Menu', 'Dishes, sizes and prices. Tap Edit to change a photo.',
-    el('button', { class: 'btn primary', type: 'button', onclick: () => menuModal(null) }, '+ Add dish')));
+    el('button', { class: 'btn primary', type: 'button', onclick: () => menuModal(null) }, '+ Add', el('span', { class: 'hide-m', text: ' dish' }))));
   const samples = S.menu.filter(m => m.example);
-  if (samples.length) root.append(el('div', { class: 'banner' }, el('span', { text: `${samples.length} sample dishes are on the menu so you can try things out. Prices are made up. Edit them or remove them all.` }),
+  if (samples.length) root.append(el('div', { class: 'banner slim' }, el('span', { text: `${samples.length} sample dishes with made-up prices.` }),
     confirmBtn('Remove all samples', 'Remove them?', async () => { for (const m of samples) await write(Store.remove('menu', m.id)); toast('Samples removed'); }, 'danger')));
   if (!S.menu.length) {
     root.append(el('div', { class: 'empty' }, el('b', { text: 'Your menu is empty' }), 'Add your first dish with "+ Add dish".',
@@ -773,10 +786,10 @@ function menuModal(item) {
 /* ---------- CUSTOMERS ---------- */
 function viewCustomers(root) {
   root.append(pageHead('Customers', 'Everyone who has ordered, with what they like.',
-    el('button', { class: 'btn primary', type: 'button', onclick: () => customerModal(null) }, '+ Add customer')));
+    el('button', { class: 'btn primary', type: 'button', onclick: () => customerModal(null) }, '+ Add', el('span', { class: 'hide-m', text: ' customer' }))));
   const stats = custStats();
   const regulars = S.customers.filter(c => (stats.get(c.id) || { n: 0 }).n >= 3).length;
-  root.append(el('div', { class: 'tiles' }, tile('Customers', S.customers.length), tile('Regulars (3+ orders)', regulars),
+  root.append(el('div', { class: 'tiles' }, tile('Customers', S.customers.length), tile('Regulars (3+)', regulars),
     tile('Repeat rate', S.customers.length ? Math.round(100 * S.customers.filter(c => (stats.get(c.id) || { n: 0 }).n >= 2).length / S.customers.length) + '%' : '–')));
   root.append(el('div', { class: 'field', style: 'margin-bottom:12px' }, el('input', { id: 'c-q', type: 'search', 'aria-label': 'Search customers', placeholder: 'Search by name, phone or address', value: S.custQ,
     oninput: e => { S.custQ = e.target.value; P.fn(); } })));
