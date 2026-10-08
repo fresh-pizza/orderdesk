@@ -9,9 +9,9 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   bucket: 'photos',
 };
-const VERSION = '1.2.0';
+const VERSION = '1.3.0';
 const COLLS = ['menu', 'customers', 'orders', 'settings'];
-const DEFAULT_SETTINGS = { id: 'main', name: 'My kitchen', currency: '¥', deliveryFee: 0 };
+const DEFAULT_SETTINGS = { id: 'main', name: 'My kitchen', currency: '¥', deliveryFee: 0, addresses: [] };
 
 /* ---------- tiny helpers ---------- */
 function el(tag, props, ...kids) {
@@ -100,15 +100,16 @@ const IDB = (() => {
 })();
 
 /* ---------- app state ---------- */
-const OPEN = ['new', 'cooking', 'ready'];
-const ST = { new: 'New', cooking: 'Cooking', ready: 'Ready', done: 'Done', cancelled: 'Cancelled' };
-const NEXT = { new: 'cooking', cooking: 'ready', ready: 'done' };
+const ST = { new: 'Active', cooking: 'Active', ready: 'Active', done: 'Active', cancelled: 'Cancelled' };
+const PAY = { wechat: 'WeChat Pay', alipay: 'Alipay' };
+const isCancelled = o => o.status === 'cancelled';
+const isUnpaid = o => !isCancelled(o) && !o.paid;
 const M = { menu: new Map(), customers: new Map(), orders: new Map(), settings: new Map() };
 const S = {
   ready: false, uid: null, email: '', signedIn: false,
   menu: [], customers: [], orders: [], settings: clone(DEFAULT_SETTINGS),
   loaded: { menu: true, customers: true, orders: true, config: true },
-  view: 'orders', ordFilter: 'open', ordLimit: 60, menuQ: '', menuCat: 'All', custQ: '', pickQ: '', pickCat: 'All',
+  view: 'orders', ordFilter: 'all', ordLimit: 60, menuQ: '', menuCat: 'All', custQ: '', pickQ: '', pickCat: 'All',
   draft: null, blobUrls: new Map(), outbox: new Map(),
 };
 function refreshArrays(colls) {
@@ -121,7 +122,10 @@ const money = n => {
   n = Number(n) || 0;
   return (S.settings.currency || '') + (Number.isInteger(n) ? n : n.toFixed(2));
 };
-const newDraft = () => ({ customerId: null, name: '', phone: '', address: '', type: 'delivery', note: '', fee: Number(S.settings.deliveryFee) || 0, lines: [] });
+const newDraft = () => ({ customerId: null, name: '', phone: '', address: '', type: 'delivery', note: '', lines: [] });
+const addrList = () => (Array.isArray(S.settings.addresses) ? S.settings.addresses : []);
+const addrFee = name => { const a = addrList().find(x => x.name === name); return a ? num(a.fee) : null; };
+const feeText = f => (f ? money(f) : 'Free');
 S.draft = newDraft();
 
 /* ---------- local writes (instant), queued for upload ---------- */
@@ -157,6 +161,16 @@ function photoDelOp(path) {
   S.outbox.set(key, entry);
   return [{ store: 'outbox', key, val: entry }];
 }
+const bucketFor = path => (/\/receipt-/.test(path) ? 'receipts' : CFG.bucket);
+async function receiptSrc(path) { // private: fetched with your login, kept in memory
+  if (!path) return '';
+  if (S.blobUrls.has(path)) return S.blobUrls.get(path);
+  try {
+    const { data, error } = await sb.storage.from('receipts').download(path);
+    if (error || !data) return '';
+    const u = URL.createObjectURL(data); S.blobUrls.set(path, u); return u;
+  } catch (_) { return ''; }
+}
 const publicUrl = path => CFG.url + '/storage/v1/object/public/' + CFG.bucket + '/' + path.split('/').map(encodeURIComponent).join('/');
 const photoUrl = path => S.blobUrls.get(path) || publicUrl(path);
 
@@ -173,12 +187,15 @@ const MAP = {
     from: x => ({ id: x.id, name: x.name, phone: x.phone, address: x.address, notes: x.notes, photo: x.photo || '', createdAt: toMs(x.created_at), deleted: !!x.deleted }),
   },
   orders: {
-    to: r => ({ id: r.id, no: r.no || 0, customer_id: r.customerId || null, customer_name: r.customerName || '', phone: r.phone || '', address: r.address || '', type: r.type || 'delivery', items: r.items || [], subtotal: num(r.subtotal), fee: num(r.fee), total: num(r.total), note: r.note || '', status: r.status || 'new', created_at: toIso(r.createdAt), deleted: !!r.deleted }),
-    from: x => ({ id: x.id, no: x.no, customerId: x.customer_id || null, customerName: x.customer_name, phone: x.phone, address: x.address, type: x.type, items: x.items || [], subtotal: num(x.subtotal), fee: num(x.fee), total: num(x.total), note: x.note, status: x.status, createdAt: toMs(x.created_at), deleted: !!x.deleted }),
+    to: r => Object.assign({ id: r.id, no: r.no || 0, customer_id: r.customerId || null, customer_name: r.customerName || '', phone: r.phone || '', address: r.address || '', type: r.type || 'delivery', items: r.items || [], subtotal: num(r.subtotal), fee: num(r.fee), total: num(r.total), note: r.note || '', status: r.status || 'new', created_at: toIso(r.createdAt), deleted: !!r.deleted },
+      r.payTouched ? { paid: !!r.paid, pay_method: r.payMethod || '', pay_proof: r.payProof || '', paid_at: r.paidAt ? toIso(r.paidAt) : null } : {}),
+    from: x => ({ id: x.id, no: x.no, customerId: x.customer_id || null, customerName: x.customer_name, phone: x.phone, address: x.address, type: x.type, items: x.items || [], subtotal: num(x.subtotal), fee: num(x.fee), total: num(x.total), note: x.note, status: x.status, createdAt: toMs(x.created_at), deleted: !!x.deleted,
+      paid: !!x.paid, payMethod: x.pay_method || '', payProof: x.pay_proof || '', paidAt: x.paid_at ? toMs(x.paid_at) : 0, payTouched: x.paid !== undefined }),
   },
   settings: {
-    to: r => ({ id: S.uid, name: r.name || 'My kitchen', currency: r.currency ?? '¥', delivery_fee: num(r.deliveryFee), deleted: false }),
-    from: x => ({ id: 'main', name: x.name, currency: x.currency, deliveryFee: num(x.delivery_fee), deleted: false }),
+    to: r => Object.assign({ id: S.uid, name: r.name || 'My kitchen', currency: r.currency ?? '¥', delivery_fee: num(r.deliveryFee), deleted: false },
+      r.addrTouched ? { addresses: r.addresses || [] } : {}),
+    from: x => ({ id: 'main', name: x.name, currency: x.currency, deliveryFee: num(x.delivery_fee), addresses: Array.isArray(x.addresses) ? x.addresses : [], addrTouched: x.addresses !== undefined, deleted: false }),
   },
 };
 
@@ -221,14 +238,17 @@ async function pushPhotos() {
       const b = await IDB.get('blobs', e.path);
       if (b) {
         const blob = new Blob([b.data], { type: b.type });
-        const { error } = await sb.storage.from(CFG.bucket).upload(e.path, blob, { contentType: b.type, cacheControl: '31536000', upsert: true });
+        const bucket = bucketFor(e.path);
+        const { error } = await sb.storage.from(bucket).upload(e.path, blob, { contentType: b.type, cacheControl: '31536000', upsert: true });
         if (error) throw error;
-        try { const c = await caches.open('od-photos'); await c.put(publicUrl(e.path), new Response(blob, { headers: { 'Content-Type': b.type } })); } catch (_) { /* cache is optional */ }
+        if (bucket === CFG.bucket) { try { const c = await caches.open('od-photos'); await c.put(publicUrl(e.path), new Response(blob, { headers: { 'Content-Type': b.type } })); } catch (_) { /* cache is optional */ } }
       }
-      await IDB.batch([{ store: 'outbox', key }, { store: 'blobs', key: e.path }]);
+      // payment screenshots stay on this device too (they are private, not cached by link)
+      await IDB.batch(bucketFor(e.path) === 'receipts' ? [{ store: 'outbox', key }] : [{ store: 'outbox', key }, { store: 'blobs', key: e.path }]);
       S.outbox.delete(key);
     } else if (e.kind === 'photo-del') {
-      const { error } = await sb.storage.from(CFG.bucket).remove([e.path]);
+      const { error } = await sb.storage.from(bucketFor(e.path)).remove([e.path]);
+      if (bucketFor(e.path) === 'receipts') await IDB.batch([{ store: 'blobs', key: e.path }]);
       if (error && !/not.?found/i.test(error.message || '')) throw error;
       await IDB.batch([{ store: 'outbox', key }]);
       S.outbox.delete(key);
@@ -304,19 +324,20 @@ function startRealtime() {
 function stopRealtime() { if (channel && sb) { try { sb.removeChannel(channel); } catch (_) { /* ignore */ } } channel = null; }
 
 /* ---------- sync indicator ---------- */
+function syncInfo() {
+  const n = Sync.waiting(), w = `${n} change${n === 1 ? '' : 's'} waiting to upload`;
+  if (!S.signedIn) return [false, 'Signed out: changes stay on this device.'];
+  if (Sync.state === 'syncing') return [false, 'Syncing…'];
+  if (Sync.state === 'offline') return [false, n ? 'Offline: ' + w : 'Offline: everything is saved on this device.'];
+  if (Sync.state === 'error') return [false, 'Sync problem: ' + Sync.err];
+  if (n) return [false, w];
+  return [true, Sync.lastOk ? 'Synced at ' + timeStr(Sync.lastOk) : 'Synced'];
+}
 function syncChip() {
-  const n = Sync.waiting();
-  let cls = 'sync', txt;
-  if (!S.signedIn) { cls += ' off'; txt = 'Not signed in'; }
-  else if (Sync.state === 'syncing') { cls += ' busy'; txt = 'Syncing…'; }
-  else if (Sync.state === 'offline') { cls += ' off'; txt = n ? `Offline · ${n} to upload` : 'Offline · all saved here'; }
-  else if (Sync.state === 'error') { cls += ' err'; txt = 'Sync problem' + (n ? ` · ${n} waiting` : ''); }
-  else if (n) { cls += ' busy'; txt = `${n} to upload`; }
-  else txt = ['Synced', Sync.lastOk ? el('span', { class: 'hide-m', text: ' ' + timeStr(Sync.lastOk) }) : null];
-  return el('button', { class: cls, type: 'button', title: Sync.err || 'Tap to sync now', onclick: () => {
-    if (Sync.state === 'error' && Sync.err) toast('Sync: ' + Sync.err, true);
-    Sync.soon(0);
-  } }, el('i'), txt);
+  const [ok, msg] = syncInfo();
+  return el('button', { class: 'sync dot ' + (ok ? 'ok' : 'wait'), type: 'button', title: msg, 'aria-label': msg, onclick: () => {
+    toast(syncInfo()[1]); if (S.signedIn) Sync.soon(0);
+  } }, el('i'));
 }
 function paintSync() {
   for (const n of document.querySelectorAll('.sync')) n.replaceWith(syncChip());
@@ -388,9 +409,9 @@ const ICONS = {
   menu: '<path d="M4 5h16M4 12h16M4 19h10"/>',
   customers: '<circle cx="12" cy="8" r="4"/><path d="M4 21c1-4 4-6 8-6s7 2 8 6"/>',
 };
-const NAV = [['orders', 'Orders'], ['new', 'New order'], ['menu', 'Menu'], ['customers', 'Customers']];
+const NAV = [['new', 'New order'], ['orders', 'Orders'], ['menu', 'Menu'], ['customers', 'Customers']];
 function renderNav() {
-  const open = S.orders.filter(o => OPEN.includes(o.status)).length;
+  const open = S.orders.filter(isUnpaid).length;
   $('#brand').replaceChildren(S.settings.name || 'My kitchen', el('small', { text: 'Order desk' }));
   $('#nav').replaceChildren(...NAV.map(([k, label]) => {
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -454,20 +475,18 @@ function tile(label, value, hot) { return el('div', { class: 'tile' + (hot ? ' h
 function viewOrders(root) {
   root.append(pageHead('Orders', new Date().toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' }),
     el('button', { class: 'btn primary hide-m', type: 'button', onclick: () => go('new') }, '+ New order')));
-  const t0 = startOfDay(Date.now());
-  const today = S.orders.filter(o => o.createdAt >= t0 && o.status !== 'cancelled');
-  const openN = S.orders.filter(o => OPEN.includes(o.status)).length;
-  root.append(el('div', { class: 'tiles' }, tile('Open now', openN, openN > 0), tile("Today's orders", today.length),
-    tile("Today's sales", money(today.reduce((a, o) => a + (o.total || 0), 0)))));
-  const filters = [['open', 'Open'], ['done', 'Done'], ['cancelled', 'Cancelled'], ['all', 'All']];
+  const paidN = S.orders.filter(o => !isCancelled(o) && o.paid).length;
+  const unpaidN = S.orders.filter(isUnpaid).length;
+  const cancN = S.orders.filter(isCancelled).length;
+  const filters = [['all', 'All'], ['paid', `Paid (${paidN})`], ['unpaid', `Unpaid (${unpaidN})`], ['cancelled', `Cancelled (${cancN})`]];
+  if (!filters.some(([k]) => k === S.ordFilter)) S.ordFilter = 'all';
   root.append(el('div', { class: 'chips' }, filters.map(([k, label]) =>
-    el('button', { class: 'chip', type: 'button', 'aria-pressed': S.ordFilter === k, onclick: () => { S.ordFilter = k; S.ordLimit = 60; render(true); } },
-      label + (k === 'open' ? ` (${openN})` : '')))));
-  const list = S.orders.filter(o => S.ordFilter === 'all' || (S.ordFilter === 'open' ? OPEN.includes(o.status) : o.status === S.ordFilter));
-  list.sort(S.ordFilter === 'open' ? (a, b) => a.createdAt - b.createdAt : (a, b) => b.createdAt - a.createdAt);
+    el('button', { class: 'chip', type: 'button', 'aria-pressed': S.ordFilter === k, onclick: () => { S.ordFilter = k; S.ordLimit = 60; render(true); } }, label))));
+  const keep = { all: () => true, paid: o => !isCancelled(o) && o.paid, unpaid: isUnpaid, cancelled: isCancelled }[S.ordFilter];
+  const list = S.orders.filter(keep).sort((a, b) => b.createdAt - a.createdAt);
   if (!list.length) {
-    root.append(el('div', { class: 'empty' }, el('b', { text: S.ordFilter === 'open' ? 'No open orders' : 'Nothing here yet' }),
-      S.orders.length ? 'Orders you take will show up here as tickets.' : 'Tap "New order" to take your first one.'));
+    root.append(el('div', { class: 'empty' }, el('b', { text: S.orders.length ? 'Nothing here' : 'No orders yet' }),
+      S.orders.length ? 'Try another filter.' : 'Tap "New order" to take your first one.'));
     return;
   }
   const shown = list.slice(0, S.ordLimit);
@@ -477,7 +496,8 @@ function viewOrders(root) {
 function confirmBtn(label, sure, fn, cls) {
   const b = el('button', { class: 'btn small ' + (cls || ''), type: 'button' }, label);
   let t;
-  b.addEventListener('click', () => {
+  b.addEventListener('click', e => {
+    e.stopPropagation();
     if (b.dataset.armed) { clearTimeout(t); fn(); return; }
     b.dataset.armed = '1'; b.textContent = sure;
     t = setTimeout(() => { delete b.dataset.armed; b.textContent = label; }, 3500);
@@ -486,33 +506,117 @@ function confirmBtn(label, sure, fn, cls) {
 }
 const setStatus = (o, status) => write(Store.patch('orders', o.id, { status }));
 const orderNo = n => '#' + String(n || 0).padStart(3, '0');
-function ticket(o) {
-  const sameDay = startOfDay(o.createdAt) === startOfDay(Date.now());
+const custOf = o => (o.customerId && M.customers.get(o.customerId)) || null;
+function whoAvatar(o, cls) { const c = custOf(o); return avatar({ name: o.customerName || 'Walk-in', photo: c && !c.deleted ? c.photo : '' }, cls); }
+function payPill(o) {
+  if (isCancelled(o)) return el('span', { class: 'pill cancelled', text: 'Cancelled' });
+  return o.paid ? el('span', { class: 'pill paid', text: 'Paid' + (PAY[o.payMethod] ? ' · ' + PAY[o.payMethod].replace(' Pay', '') : '') })
+    : el('span', { class: 'pill unpaid', text: 'Unpaid' });
+}
+function itemLines(o) {
   const items = (o.items || []).map(it => el('li', {},
     el('span', { text: `${it.qty}× ${it.name}${it.variant ? ' (' + it.variant + ')' : ''}` }),
     el('span', { text: money((it.price || 0) * (it.qty || 0)) })));
-  if (o.fee) items.push(el('li', {}, el('span', { text: 'Delivery fee' }), el('span', { text: money(o.fee) })));
+  if (o.type === 'delivery') items.push(el('li', {}, el('span', { text: 'Delivery' }), el('span', { text: feeText(o.fee) })));
+  return items;
+}
+function ticket(o) {
+  const sameDay = startOfDay(o.createdAt) === startOfDay(Date.now());
   const acts = [];
-  if (NEXT[o.status]) {
-    const label = o.status === 'new' ? 'Start cooking' : o.status === 'cooking' ? 'Mark ready' : (o.type === 'delivery' ? 'Mark delivered' : 'Mark picked up');
-    acts.push(el('button', { class: 'btn small primary', type: 'button', onclick: () => setStatus(o, NEXT[o.status]) }, label));
+  if (isCancelled(o)) {
+    acts.push(el('button', { class: 'btn small', type: 'button', onclick: e => { e.stopPropagation(); setStatus(o, 'new'); } }, 'Reopen'));
+    acts.push(confirmBtn('Delete', 'Delete for good?', () => write(Store.remove('orders', o.id), 'Order deleted'), 'danger'));
+  } else if (!o.paid) {
+    acts.push(el('button', { class: 'btn small pay', type: 'button', onclick: e => { e.stopPropagation(); payModal(o); } }, 'Mark paid'));
     acts.push(confirmBtn('Cancel', 'Sure?', () => setStatus(o, 'cancelled'), 'danger'));
   } else {
-    acts.push(el('button', { class: 'btn small', type: 'button', onclick: () => setStatus(o, 'new') }, 'Reopen'));
-    if (o.status === 'cancelled') acts.push(confirmBtn('Delete', 'Delete for good?', () => write(Store.remove('orders', o.id), 'Order deleted'), 'danger'));
+    acts.push(el('span', { class: 'paid-note', text: '✓ ' + (PAY[o.payMethod] || 'Paid') + (o.payProof ? ' · screenshot' : '') }));
   }
-  return el('article', { class: 'ticket t-' + o.status, 'data-id': o.id },
+  return el('article', { class: 'ticket ' + (isCancelled(o) ? 't-cancelled' : o.paid ? 't-paid' : 't-unpaid'), 'data-id': o.id, tabindex: '0',
+    onclick: () => orderSheet(o), onkeydown: e => { if (e.key === 'Enter') orderSheet(o); } },
     el('div', { class: 't-head' },
       el('span', { class: 't-no', text: orderNo(o.no) }),
       el('span', { class: 't-time', text: timeStr(o.createdAt) + (sameDay ? '' : ' · ' + dateShort(o.createdAt)) }),
       el('span', { class: 'tag', text: o.type === 'delivery' ? 'Delivery' : 'Pickup' }),
-      el('span', { class: 'pill ' + o.status, text: ST[o.status] || o.status })),
+      payPill(o)),
     el('div', { class: 't-body' },
-      el('div', { class: 'who' }, o.customerName || 'Walk-in', o.phone ? el('small', { text: o.phone }) : null),
+      el('div', { class: 'who' }, whoAvatar(o, 'sm'), el('span', { class: 'who-nm' }, o.customerName || 'Walk-in', o.phone ? el('small', { text: o.phone }) : null)),
       o.address ? el('div', { class: 'addr', text: o.address }) : null,
-      el('ul', { class: 'lines' }, items),
+      el('ul', { class: 'lines' }, itemLines(o)),
       o.note ? el('div', { class: 'note', text: o.note }) : null),
     el('div', { class: 't-foot' }, el('span', { class: 't-total', text: money(o.total) }), acts));
+}
+/* the whole order, tapped from its ticket */
+function orderSheet(o0) {
+  const o = M.orders.get(o0.id) || o0;
+  const img = el('div', { class: 'receipt-box' });
+  if (o.payProof) {
+    img.append(el('div', { class: 'sub', text: 'Loading screenshot…' }));
+    receiptSrc(o.payProof).then(src => img.replaceChildren(src
+      ? el('a', { href: src, target: '_blank', rel: 'noopener' }, el('img', { class: 'receipt', src, alt: 'Payment screenshot' }))
+      : el('div', { class: 'sub', text: 'Screenshot not available right now (offline?).' })));
+  }
+  const payPart = isCancelled(o) ? null : o.paid
+    ? el('div', { class: 'sect' }, el('h3', { text: 'Payment' }),
+      el('div', {}, `Paid with ${PAY[o.payMethod] || 'unknown'}`, o.paidAt ? el('span', { class: 'sub', text: ' · ' + dateShort(o.paidAt) + ' ' + timeStr(o.paidAt) }) : null),
+      img,
+      el('div', { class: 'btns' },
+        el('button', { class: 'btn small', type: 'button', onclick: () => payModal(o) }, 'Change payment'),
+        confirmBtn('Mark unpaid', o.payProof ? 'Unpaid + remove screenshot?' : 'Mark unpaid?', async () => {
+          if (await write(Store.put('orders', Object.assign({}, o, { paid: false, payMethod: '', payProof: '', paidAt: 0, payTouched: true }), photoDelOp(o.payProof)), 'Marked unpaid')) closeModal();
+        })))
+    : el('div', { class: 'sect' }, el('h3', { text: 'Payment' }), el('div', { class: 'sub', text: 'Not paid yet.' }),
+      el('div', { class: 'btns' }, el('button', { class: 'btn pay', type: 'button', onclick: () => payModal(o) }, 'Mark paid')));
+  openModal(el('div', { class: 'sheet' },
+    el('div', { class: 'od-head' }, el('h2', { text: `Order ${orderNo(o.no)}` }), payPill(o)),
+    el('div', { class: 'sub', text: `${dateShort(o.createdAt)} ${timeStr(o.createdAt)} · ${o.type === 'delivery' ? 'Delivery' : 'Pickup'}` }),
+    el('div', { class: 'who-head' }, whoAvatar(o, 'big'), el('div', {}, el('b', { text: o.customerName || 'Walk-in' }), o.phone ? el('div', { class: 'sub', text: o.phone }) : null, o.address ? el('div', { class: 'sub', text: o.address }) : null)),
+    el('ul', { class: 'lines' }, itemLines(o)),
+    el('div', { class: 'sum total' }, el('span', { text: 'Total' }), el('span', { text: money(o.total) })),
+    o.note ? el('div', { class: 'note', text: o.note }) : null,
+    payPart,
+    el('div', { class: 'actions' },
+      isCancelled(o) ? el('button', { class: 'btn small left', type: 'button', onclick: () => { setStatus(o, 'new'); closeModal(); } }, 'Reopen')
+        : confirmBtn('Cancel order', 'Cancel it?', () => { setStatus(o, 'cancelled'); closeModal(); }, 'danger left'),
+      isCancelled(o) ? confirmBtn('Delete', 'Delete for good?', async () => { if (await write(Store.remove('orders', o.id, photoDelOp(o.payProof)), 'Order deleted')) closeModal(); }, 'danger') : null,
+      el('button', { class: 'btn', type: 'button', onclick: closeModal }, 'Close'))));
+}
+/* record a payment: WeChat Pay or Alipay, optional screenshot */
+function payModal(o0) {
+  const o = M.orders.get(o0.id) || o0;
+  let method = o.payMethod || 'wechat', blob = null, preview = '', keepOld = !!o.payProof;
+  const seg = el('div', { class: 'seg', role: 'group', 'aria-label': 'Paid with' });
+  const shot = el('div', { class: 'photo-edit' });
+  const status = el('div', { class: 'sub' });
+  const drawSeg = () => seg.replaceChildren(...Object.entries(PAY).map(([k, label]) =>
+    el('button', { type: 'button', 'aria-pressed': method === k, onclick: () => { method = k; drawSeg(); } }, label)));
+  async function drawShot() {
+    const src = blob ? preview : (keepOld && o.payProof ? await receiptSrc(o.payProof) : '');
+    shot.replaceChildren(src ? el('img', { class: 'receipt-thumb', src, alt: '' }) : el('div', { class: 'ph', style: '--h:40', text: '🧾' }),
+      el('div', { style: 'display:flex;flex-direction:column;gap:6px' },
+        el('label', { class: 'btn small', style: 'text-align:center' }, src ? 'Change screenshot' : 'Add screenshot',
+          el('input', { type: 'file', accept: 'image/*', style: 'display:none', onchange: onFile })),
+        src ? el('button', { class: 'link', type: 'button', onclick: () => { blob = null; keepOld = false; drawShot(); } }, 'Remove screenshot') : el('span', { class: 'sub', text: 'Optional' })));
+  }
+  async function onFile(e) {
+    const f = e.target.files && e.target.files[0]; if (!f) return;
+    status.textContent = 'Preparing screenshot…';
+    try { blob = await shrinkPhoto(f, 1600, false); if (preview) URL.revokeObjectURL(preview); preview = URL.createObjectURL(blob); status.textContent = ''; drawShot(); }
+    catch (err) { status.textContent = ''; toast((err && err.message) || 'Could not read that picture.', true); }
+  }
+  async function save() {
+    let proof = keepOld ? o.payProof : '';
+    if (blob) { proof = `${S.uid}/receipt-${newId()}.jpg`; try { await queuePhoto(proof, blob); } catch (_) { return toast('Could not store the screenshot on this device.', true); } }
+    const extra = o.payProof && o.payProof !== proof ? photoDelOp(o.payProof) : [];
+    const rec = Object.assign({}, o, { paid: true, payMethod: method, payProof: proof, paidAt: o.paid && o.paidAt ? o.paidAt : Date.now(), payTouched: true });
+    if (await write(Store.put('orders', rec, extra), `${orderNo(o.no)} marked paid`)) closeModal();
+  }
+  drawSeg(); drawShot();
+  openModal(el('div', { class: 'sheet' }, el('h2', { text: `Payment for ${orderNo(o.no)} · ${money(o.total)}` }),
+    el('div', { class: 'field' }, el('label', { text: 'Paid with' }), seg),
+    el('div', { class: 'field' }, el('label', { text: 'Payment screenshot' }), shot, status),
+    el('div', { class: 'actions' }, el('button', { class: 'btn', type: 'button', onclick: closeModal }, 'Cancel'),
+      el('button', { class: 'btn pay', type: 'button', id: 'pay-save', onclick: save }, 'Save as paid'))));
 }
 
 /* ---------- NEW ORDER ---------- */
@@ -521,12 +625,11 @@ function viewNew(root) {
   const d = S.draft;
   const field = (id, label, key, attrs) => el('div', { class: 'field' }, el('label', { for: id, text: label }),
     el('input', Object.assign({ id, value: d[key], autocomplete: 'off', oninput: e => { d[key] = e.target.value; if (key !== 'address') { d.customerId = null; refreshCustomerBits(); } } }, attrs)));
-  N.suggest = el('div'); N.known = el('div'); N.addrField = field('o-addr', 'Address', 'address');
+  N.suggest = el('div'); N.known = el('div'); N.addrField = el('div', { class: 'field' });
   N.typeSeg = el('div', { class: 'seg', role: 'group', 'aria-label': 'Order type' });
   N.grid = el('div', { class: 'grid' }); N.chips = el('div', { class: 'chips' });
   N.basket = el('div', { class: 'card basket', id: 'basket' });
   N.bar = el('button', { class: 'sumbar', type: 'button', hidden: true, onclick: () => N.basket.scrollIntoView({ behavior: 'smooth', block: 'start' }) });
-  N.search = el('input', { id: 'o-q', type: 'search', 'aria-label': 'Search the menu', placeholder: 'Search the menu', value: S.pickQ, oninput: e => { S.pickQ = e.target.value; refreshGrid(); } });
   N.root = el('div', {},
     pageHead('New order', 'Pick a customer, add items, save.'),
     el('div', { class: 'neworder' },
@@ -535,8 +638,7 @@ function viewNew(root) {
           el('div', { class: 'row' }, field('o-name', 'Name', 'name', { placeholder: 'Type a name to find a regular' }), field('o-phone', 'Phone', 'phone', { type: 'tel', inputmode: 'tel' })),
           N.suggest, N.known,
           el('div', { style: 'margin-top:10px;display:flex;flex-direction:column;gap:10px' }, N.typeSeg, N.addrField)),
-        el('div', { class: 'card' }, el('h2', { text: 'Menu' }),
-          el('div', { class: 'field', style: 'margin-bottom:10px' }, N.search), N.chips, N.grid)),
+        el('div', { class: 'card' }, el('h2', { text: 'Menu' }), N.chips, N.grid)),
       N.basket), N.bar);
   root.append(N.root);
   refreshNew();
@@ -547,6 +649,7 @@ function refreshCustomerBits() {
   N.typeSeg.replaceChildren(...[['delivery', 'Delivery'], ['pickup', 'Pickup']].map(([k, label]) =>
     el('button', { type: 'button', 'aria-pressed': d.type === k, onclick: () => { d.type = k; refreshCustomerBits(); refreshBasket(); } }, label)));
   N.addrField.hidden = d.type !== 'delivery';
+  drawAddrPicker();
   const known = d.customerId && S.customers.find(c => c.id === d.customerId);
   const st = known && custStats().get(known.id);
   N.known.replaceChildren(...(known ? [el('div', { class: 'known' },
@@ -561,10 +664,26 @@ function refreshCustomerBits() {
   N.suggest.replaceChildren(...(hits.length ? [el('div', { class: 'suggest' }, hits.map(c =>
     el('button', { type: 'button', onclick: () => pickCustomer(c) }, el('span', { class: 'sg-name' }, avatar(c, 'sm'), el('span', { text: c.name })), el('span', { class: 'sub', text: c.phone || '' }))))] : []));
 }
+function addrSelect(id, value, onchange, withLegacy) {
+  const list = addrList();
+  const opts = [el('option', { value: '', text: list.length ? 'Choose address…' : 'No addresses yet' }),
+    ...list.map(a => el('option', { value: a.name, text: `${a.name} — ${feeText(num(a.fee))}` }))];
+  if (withLegacy && value && !list.some(a => a.name === value)) opts.push(el('option', { value, text: value + ' (not in your list)' }));
+  const sel = el('select', { id, onchange: e => onchange(e.target.value) }, opts);
+  sel.value = value || '';
+  return sel;
+}
+function drawAddrPicker() {
+  const d = S.draft;
+  if (d.address && addrFee(d.address) === null) d.address = '';
+  N.addrField.replaceChildren(...[el('label', { for: 'o-addr', text: 'Delivery address' }),
+    addrSelect('o-addr', d.address, v => { d.address = v; refreshBasket(); }),
+    addrList().length ? null : el('div', { class: 'sub' }, 'Add your delivery addresses in ', el('button', { class: 'link', type: 'button', onclick: () => settingsModal() }, 'Settings'), '.')].filter(Boolean));
+}
 function pickCustomer(c) {
-  Object.assign(S.draft, { customerId: c.id, name: c.name || '', phone: c.phone || '', address: c.address || '' });
-  $('#o-name').value = S.draft.name; $('#o-phone').value = S.draft.phone; $('#o-addr').value = S.draft.address;
-  refreshCustomerBits();
+  Object.assign(S.draft, { customerId: c.id, name: c.name || '', phone: c.phone || '', address: addrFee(c.address) !== null ? c.address : '' });
+  $('#o-name').value = S.draft.name; $('#o-phone').value = S.draft.phone;
+  refreshCustomerBits(); refreshBasket();
 }
 function menuCats(list) {
   return ['All', ...new Set(list.map(m => m.category || 'Other'))].sort((a, b) => a === 'All' ? -1 : b === 'All' ? 1 : a.localeCompare(b));
@@ -573,9 +692,8 @@ function refreshGrid() {
   const cats = menuCats(S.menu);
   if (!cats.includes(S.pickCat)) S.pickCat = 'All';
   N.chips.replaceChildren(...cats.map(c => el('button', { class: 'chip', type: 'button', 'aria-pressed': S.pickCat === c, onclick: () => { S.pickCat = c; refreshGrid(); } }, c)));
-  const q = S.pickQ.trim().toLowerCase();
-  const items = sortedMenu().filter(m => (S.pickCat === 'All' || (m.category || 'Other') === S.pickCat) && (!q || (m.name || '').toLowerCase().includes(q)));
-  if (!items.length) { N.grid.replaceChildren(el('div', { class: 'empty' }, el('b', { text: S.menu.length ? 'No match' : 'The menu is empty' }), S.menu.length ? 'Try another word or category.' : 'Add dishes in the Menu section first.')); return; }
+  const items = sortedMenu().filter(m => S.pickCat === 'All' || (m.category || 'Other') === S.pickCat);
+  if (!items.length) { N.grid.replaceChildren(el('div', { class: 'empty' }, el('b', { text: 'The menu is empty' }), 'Add dishes in the Menu section first.')); return; }
   const inBasket = new Map();
   for (const l of S.draft.lines) inBasket.set(l.menuId, (inBasket.get(l.menuId) || 0) + l.qty);
   N.grid.replaceChildren(...items.map(m => el('button', { class: 'mi' + (inBasket.has(m.id) ? ' picked' : ''), type: 'button', disabled: m.available === false, onclick: () => addItem(m) },
@@ -599,7 +717,7 @@ function addLine(m, v) {
 }
 function totals() {
   const d = S.draft, sub = d.lines.reduce((a, l) => a + l.price * l.qty, 0);
-  const fee = d.type === 'delivery' && d.lines.length ? (Number(d.fee) || 0) : 0;
+  const fee = d.type === 'delivery' && d.lines.length ? (addrFee(d.address) || 0) : 0;
   return { sub, fee, total: sub + fee };
 }
 function refreshBasket() {
@@ -612,8 +730,8 @@ function refreshBasket() {
       el('span', { text: l.qty }),
       el('button', { type: 'button', 'aria-label': 'One more', onclick: () => { l.qty++; refreshBasket(); refreshGrid(); } }, '+')),
     el('button', { class: 'link', type: 'button', style: 'justify-self:end', onclick: () => { d.lines.splice(i, 1); refreshBasket(); refreshGrid(); } }, 'Remove')));
-  const feeInput = d.type === 'delivery' ? el('div', { class: 'field fee-row' }, el('label', { for: 'o-fee', text: 'Delivery fee' }),
-    el('input', { id: 'o-fee', type: 'number', inputmode: 'decimal', min: '0', step: '0.5', value: d.fee, oninput: e => { d.fee = e.target.value; $('#b-total').textContent = money(totals().total); } })) : null;
+  const feeInput = d.type === 'delivery' ? el('div', { class: 'sum', id: 'b-fee' }, el('span', { text: 'Delivery' + (d.address ? ' · ' + d.address : '') }),
+    el('span', { text: d.address ? feeText(addrFee(d.address) || 0) : 'choose address' })) : null;
   N.basket.replaceChildren(
     el('h2', { text: 'Order' }),
     ...(d.lines.length ? lines : [el('div', { class: 'empty', style: 'padding:18px 10px' }, 'Tap dishes in the menu to add them.')]),
@@ -634,7 +752,8 @@ async function saveOrder() {
   const d = S.draft;
   if (!d.lines.length) return;
   const btn = $('#b-save'); btn.disabled = true;
-  const now = Date.now(), name = d.name.trim(), phone = d.phone.trim(), addr = d.type === 'delivery' ? d.address.trim() : '';
+  const now = Date.now(), name = d.name.trim(), phone = d.phone.trim(), addr = d.type === 'delivery' ? d.address : '';
+  if (d.type === 'delivery' && addrFee(addr) === null) { btn.disabled = false; toast('Choose a delivery address (or switch to Pickup).', true); $('#o-addr') && $('#o-addr').focus(); return; }
   let cid = d.customerId;
   if (!cid && (name || phone)) {
     const ph = phone.replace(/\s/g, '');
@@ -642,7 +761,7 @@ async function saveOrder() {
     if (found) cid = found.id;
     else {
       cid = newId();
-      if (!await write(Store.put('customers', { id: cid, name: name || 'Customer', phone, address: d.address.trim(), notes: '', createdAt: now }))) { btn.disabled = false; return; }
+      if (!await write(Store.put('customers', { id: cid, name: name || 'Customer', phone, address: addr, notes: '', createdAt: now }))) { btn.disabled = false; return; }
     }
   } else if (cid) {
     const c = S.customers.find(x => x.id === cid);
@@ -655,7 +774,7 @@ async function saveOrder() {
     subtotal: t.sub, fee: t.fee, total: t.total, note: d.note.trim(), status: 'new', createdAt: now,
   };
   if (await write(Store.put('orders', order), `Order ${orderNo(no)} saved`)) {
-    S.draft = newDraft(); S.ordFilter = 'open'; go('orders');
+    S.draft = newDraft(); S.ordFilter = 'all'; go('orders');
   } else btn.disabled = false;
 }
 
@@ -713,17 +832,17 @@ function menuResults(root) {
         el('label', { class: 'switch' }, el('input', { type: 'checkbox', checked: m.available !== false, 'aria-label': 'Available', onchange: e => write(Store.patch('menu', m.id, { available: e.target.checked })) }), 'Available'))))));
   }
 }
-async function shrinkPhoto(file) {
+async function shrinkPhoto(file, max = 800, webp = true) {
   let src;
   try { src = await createImageBitmap(file, { imageOrientation: 'from-image' }); }
   catch (_) {
     src = await new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = () => rej(new Error('That file is not a picture this phone can read.')); im.src = URL.createObjectURL(file); });
   }
   const w = src.width || src.naturalWidth, h = src.height || src.naturalHeight;
-  const k = Math.min(1, 800 / Math.max(w, h));
+  const k = Math.min(1, max / Math.max(w, h));
   const cv = document.createElement('canvas'); cv.width = Math.round(w * k); cv.height = Math.round(h * k);
   cv.getContext('2d').drawImage(src, 0, 0, cv.width, cv.height);
-  const blob = (b => b)(await new Promise(r => cv.toBlob(r, 'image/webp', 0.8)));
+  const blob = webp ? await new Promise(r => cv.toBlob(r, 'image/webp', 0.8)) : null;
   if (blob && blob.type === 'image/webp') return blob;
   return new Promise(r => cv.toBlob(r, 'image/jpeg', 0.8)); // Safari cannot make WebP; JPEG instead
 }
@@ -835,7 +954,8 @@ function customerModal(c) {
     s ? el('div', { class: 'tiles', style: 'margin:0' }, tile('Orders', s.n), tile('Spent', money(s.spent)), tile('Last order', ago(s.last))) : null,
     favs.length ? el('div', {}, el('div', { class: 'sub', style: 'margin-bottom:6px', text: 'Usually orders' }), el('div', { class: 'favs' }, favs.map(([n, q]) => el('span', { class: 'tag', text: `${n} ×${q}` })))) : null,
     el('div', { class: 'row' }, field('k-name', 'Name', 'name'), field('k-phone', 'Phone', 'phone', null, { type: 'tel', inputmode: 'tel' })),
-    field('k-addr', 'Address', 'address'), field('k-notes', 'Notes (allergies, gate code…)', 'notes', 'textarea'),
+    el('div', { class: 'field' }, el('label', { for: 'k-addr', text: 'Delivery address' }), addrSelect('k-addr', m.address || '', v => { m.address = v; }, true)),
+    field('k-notes', 'Notes (allergies, gate code…)', 'notes', 'textarea'),
     hist.length ? el('div', {}, el('div', { class: 'sub', style: 'margin-bottom:6px', text: 'Recent orders' }),
       el('div', { class: 'hist' }, hist.map(o => el('div', {}, el('span', { text: `${orderNo(o.no)} · ${dateShort(o.createdAt)} · ${(o.items || []).map(i => i.qty + '× ' + i.name).join(', ')}` }), el('span', { text: o.status === 'cancelled' ? 'cancelled' : money(o.total) }))))) : null,
     el('div', { class: 'actions' },
@@ -950,9 +1070,9 @@ function excelBlob() {
   const orders = S.orders.slice().sort((a, b) => (a.no || 0) - (b.no || 0) || a.createdAt - b.createdAt);
   const st = custStats();
   return XLSX.build([
-    { name: 'Orders', widths: [7, 11, 7, 11, 9, 20, 15, 28, 45, 11, 11, 10, 25],
-      rows: [['No', 'Date', 'Time', 'Status', 'Type', 'Customer', 'Phone', 'Address', 'Items', 'Items total', 'Delivery fee', 'Total', 'Note'],
-        ...orders.map(o => [o.no, { date: o.createdAt }, { time: o.createdAt }, ST[o.status] || o.status, o.type === 'delivery' ? 'Delivery' : 'Pickup', o.customerName, o.phone, o.address,
+    { name: 'Orders', widths: [7, 11, 7, 10, 6, 11, 9, 20, 15, 24, 45, 11, 11, 10, 25],
+      rows: [['No', 'Date', 'Time', 'Status', 'Paid', 'Paid with', 'Type', 'Customer', 'Phone', 'Address', 'Items', 'Items total', 'Delivery fee', 'Total', 'Note'],
+        ...orders.map(o => [o.no, { date: o.createdAt }, { time: o.createdAt }, ST[o.status] || o.status, isCancelled(o) ? '' : o.paid ? 'Yes' : 'No', o.paid ? (PAY[o.payMethod] || '') : '', o.type === 'delivery' ? 'Delivery' : 'Pickup', o.customerName, o.phone, o.address,
           (o.items || []).map(i => `${i.qty}x ${i.name}${i.variant ? ' (' + i.variant + ')' : ''}`).join('; '), num(o.subtotal), num(o.fee), num(o.total), o.note])] },
     { name: 'Order lines', widths: [7, 11, 11, 24, 10, 6, 9, 10],
       rows: [['Order no', 'Date', 'Status', 'Item', 'Size', 'Qty', 'Price', 'Line total'],
@@ -978,6 +1098,12 @@ function backupAgeDays() {
 const b64 = buf => { let s = ''; const b = new Uint8Array(buf); for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000)); return btoa(s); };
 const unb64 = s => { const bin = atob(s), b = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i); return b; };
 async function photoBytes(path) {
+  if (bucketFor(path) === 'receipts') {
+    const local = await IDB.get('blobs', path);
+    if (local) return { type: local.type, data: local.data };
+    try { const { data } = await sb.storage.from('receipts').download(path); if (data) return { type: data.type || 'image/jpeg', data: await data.arrayBuffer() }; } catch (_) { /* offline */ }
+    return null;
+  }
   const local = await IDB.get('blobs', path);
   if (local) return { type: local.type, data: local.data };
   try {
@@ -994,9 +1120,10 @@ async function saveBackup() {
     const strip = arr => arr.map(stripV);
     const photos = {};
     let missing = 0;
-    for (const m of [...S.menu, ...S.customers]) if (m.photo && !photos[m.photo]) {
-      const p = await photoBytes(m.photo);
-      if (p) photos[m.photo] = { type: p.type, data: b64(p.data) }; else missing++;
+    const paths = [...S.menu.map(m => m.photo), ...S.customers.map(c => c.photo), ...S.orders.map(o => o.payProof)].filter(Boolean);
+    for (const path of new Set(paths)) {
+      const p = await photoBytes(path);
+      if (p) photos[path] = { type: p.type, data: b64(p.data) }; else missing++;
     }
     const data = { app: 'orderdesk', version: 1, exportedAt: new Date().toISOString(),
       settings: stripV(S.settings), menu: strip(S.menu), customers: strip(S.customers), orders: strip(S.orders), photos };
@@ -1037,6 +1164,7 @@ async function doRestore(data) {
         if (!r || !r.id) continue;
         const rec = Object.assign({}, r); delete rec._v;
         if ((coll === 'menu' || coll === 'customers') && rec.photo) rec.photo = remap.get(rec.photo) || (rec.photo.startsWith(S.uid + '/') ? rec.photo : '');
+        if (coll === 'orders' && rec.payProof) { rec.payProof = remap.get(rec.payProof) || (rec.payProof.startsWith(S.uid + '/') ? rec.payProof : ''); rec.payTouched = true; }
         await Store.put(coll, rec); count++;
       }
     }
@@ -1048,15 +1176,33 @@ async function doRestore(data) {
 /* ---------- settings ---------- */
 function settingsModal() {
   const s = clone(S.settings);
+  const addrs = addrList().map(a => ({ id: a.id || newId(), name: a.name, fee: a.fee, was: a.name }));
+  const abox = el('div', { class: 'addr-list' });
+  const drawAddrs = () => abox.replaceChildren(...addrs.map((a, i) => el('div', { class: 'addr-row' },
+    el('input', { value: a.name, placeholder: 'e.g. Chang\'an Uni West Gate', 'aria-label': 'Address name', oninput: e => { a.name = e.target.value; } }),
+    el('div', { class: 'fee-in' }, el('span', { text: s.currency || '' }), el('input', { type: 'number', inputmode: 'decimal', min: '0', step: '0.5', value: a.fee, placeholder: '0', 'aria-label': 'Delivery fee', oninput: e => { a.fee = e.target.value; } })),
+    el('button', { class: 'x', type: 'button', 'aria-label': 'Remove address', onclick: () => { addrs.splice(i, 1); drawAddrs(); } }, '✕'))),
+    ...(addrs.length ? [] : [el('div', { class: 'sub', text: 'No addresses yet.' })]));
+  drawAddrs();
   const f = (id, label, key, attrs) => el('div', { class: 'field' }, el('label', { for: id, text: label }), el('input', Object.assign({ id, value: s[key], oninput: e => { s[key] = e.target.value; } }, attrs)));
   const n = Sync.waiting();
   openModal(el('div', { class: 'sheet' }, el('h2', { text: 'Settings' }),
     f('s-name', 'Business name', 'name'),
-    el('div', { class: 'row' }, f('s-cur', 'Currency symbol', 'currency', { maxlength: '4' }), f('s-fee', 'Default delivery fee', 'deliveryFee', { type: 'number', inputmode: 'decimal', min: '0', step: '0.5' })),
+    f('s-cur', 'Currency symbol', 'currency', { maxlength: '4' }),
+    el('div', { class: 'sect' }, el('h3', { text: 'Delivery addresses' }),
+      el('div', { class: 'sub', text: 'Only these can be picked for a delivery. Fee 0 = free delivery.' }),
+      abox, el('button', { class: 'link', type: 'button', style: 'align-self:flex-start', onclick: () => { addrs.push({ id: newId(), name: '', fee: '', was: '' }); drawAddrs(); const ins = abox.querySelectorAll('.addr-row input:not([type=number])'); if (ins.length) ins[ins.length - 1].focus(); } }, '+ Add address')),
     el('div', { class: 'actions' }, el('button', { class: 'btn', type: 'button', onclick: closeModal }, 'Close'),
-      el('button', { class: 'btn primary', type: 'button', onclick: async () => {
-        const rec = { id: 'main', name: (s.name || '').trim() || 'My kitchen', currency: s.currency || '', deliveryFee: Number(s.deliveryFee) || 0 };
-        if (await write(Store.put('settings', rec), 'Settings saved')) closeModal();
+      el('button', { class: 'btn primary', type: 'button', id: 's-save', onclick: async () => {
+        const clean = addrs.map(a => ({ id: a.id, name: (a.name || '').trim(), fee: Math.max(0, Number(a.fee) || 0), was: a.was })).filter(a => a.name);
+        const names = clean.map(a => a.name.toLowerCase());
+        if (new Set(names).size !== names.length) return toast('Two addresses have the same name.', true);
+        const rec = { id: 'main', name: (s.name || '').trim() || 'My kitchen', currency: s.currency || '', deliveryFee: num(S.settings.deliveryFee),
+          addresses: clean.map(({ id, name, fee }) => ({ id, name, fee })), addrTouched: true };
+        if (!await write(Store.put('settings', rec), 'Settings saved')) return;
+        // a renamed address follows the customers who use it
+        for (const a of clean) if (a.was && a.was !== a.name) for (const c of S.customers.filter(x => x.address === a.was)) await Store.patch('customers', c.id, { address: a.name });
+        closeModal();
       } }, 'Save settings')),
     el('div', { class: 'sect' }, el('h3', { text: 'Your data' }),
       el('div', { class: 'sub', text: backupAgeDays() === Infinity ? 'No backup file saved from this device yet.' : `Last backup file: ${backupAgeDays() === 0 ? 'today' : backupAgeDays() + ' days ago'}.` }),
