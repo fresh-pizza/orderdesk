@@ -9,7 +9,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   bucket: 'photos',
 };
-const VERSION = '1.5.0';
+const VERSION = '2.0.0';
 const COLLS = ['menu', 'customers', 'orders', 'settings', 'purchases'];
 const DEFAULT_SETTINGS = { id: 'main', name: 'My kitchen', currency: '¥', deliveryFee: 0, addresses: [] };
 
@@ -217,7 +217,7 @@ const Sync = {
   waiting() { return S.outbox.size; },
   set(state, err) { this.state = state; this.err = err || ''; paintSync(); },
   async run() {
-    if (!sb || !S.signedIn) { paintSync(); return; }
+    if (!sb || !S.signedIn || S.notAdmin) { paintSync(); return; }
     if (this.busy) { this.again = true; return; }
     if (navigator.onLine === false) { this.set('offline'); return; }
     this.busy = true; this.set('syncing');
@@ -445,6 +445,8 @@ function scheduleRender() { if (!raf) raf = requestAnimationFrame(() => { raf = 
 function render(viewChanged) {
   if (!S.ready) return;
   if (!S.uid) { showLogin(); return; }
+  if (S.notAdmin) { showStaffOnly(); return; }
+  if (S.loginOpen) return; // the sign-in screen is up; don't cover it
   $('#app').hidden = false; $('#login').hidden = true;
   renderNav();
   const main = $('#main');
@@ -1433,7 +1435,8 @@ function settingsModal() {
 function showLogin(force) {
   if (S.uid && !force) return;
   const box = $('#login');
-  if (!box.hidden && box.firstChild) return; // already showing; don't wipe what is being typed
+  if (!box.hidden && box.firstChild && box.querySelector('form')) return; // already showing; don't wipe what is being typed
+  S.loginOpen = true;
   $('#app').hidden = !S.uid;
   const err = el('div', { class: 'err', role: 'alert' });
   const email = el('input', { id: 'l-email', type: 'email', autocomplete: 'username', inputmode: 'email', value: S.email || '' });
@@ -1446,7 +1449,7 @@ function showLogin(force) {
       const { data, error } = await sb.auth.signInWithPassword({ email: email.value.trim(), password: pass.value });
       if (error) throw error;
       await onSession(data.session);
-      box.hidden = true; $('#app').hidden = false; render(true);
+      S.loginOpen = false; box.hidden = true; $('#app').hidden = false; render(true);
     } catch (ex) {
       const m = (ex && ex.message) || String(ex);
       err.textContent = /invalid login/i.test(m) ? 'Wrong email or password.' : /fetch|network|load failed/i.test(m) ? 'No connection to the server. Check the internet or VPN and try again.' : m;
@@ -1457,7 +1460,7 @@ function showLogin(force) {
     el('div', { class: 'field' }, el('label', { for: 'l-email', text: 'Email' }), email),
     el('div', { class: 'field' }, el('label', { for: 'l-pass', text: 'Password' }), pass),
     err, btn,
-    S.uid ? el('button', { class: 'link', type: 'button', onclick: () => { box.hidden = true; $('#app').hidden = false; render(true); } }, 'Back to the app') : null);
+    S.uid ? el('button', { class: 'link', type: 'button', onclick: () => { S.loginOpen = false; box.hidden = true; $('#app').hidden = false; render(true); } }, 'Back to the app') : null);
   box.replaceChildren(form); box.hidden = false;
   if (S.uid) $('#app').hidden = true;
 }
@@ -1469,8 +1472,31 @@ async function onSession(session) {
   }
   S.uid = uid; S.email = session.user.email || ''; S.signedIn = true;
   await IDB.batch([{ store: 'meta', key: 'uid', val: uid }, { store: 'meta', key: 'email', val: S.email }]);
+  await checkRole();
+  if (S.notAdmin) { stopRealtime(); return; }
   try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (_) { /* ignore */ }
   startRealtime(); Sync.soon(0);
+}
+/* this app is for the team only; client accounts are turned away (the database refuses them anyway) */
+async function checkRole() {
+  try {
+    const { data, error } = await sb.rpc('is_admin');
+    if (error) {
+      if (/^(PGRST202|42883)$/.test(String(error.code || ''))) S.notAdmin = false; // older database without roles
+      return; // offline or other trouble: keep what we knew
+    }
+    S.notAdmin = data === false;
+    await IDB.batch([{ store: 'meta', key: 'notAdmin', val: S.notAdmin }]);
+  } catch (_) { /* offline: keep what we knew */ }
+}
+function showStaffOnly() {
+  $('#app').hidden = true;
+  const box = $('#login'); box.hidden = false; S.loginOpen = true;
+  if (box.querySelector('#staff-out')) return;
+  box.replaceChildren(el('div', { class: 'card' },
+    el('h1', { text: 'Staff only' }),
+    el('p', { text: `${S.email || 'This account'} is a customer account. This app is for the kitchen team. To order food, use the shop.` }),
+    el('button', { class: 'btn primary', type: 'button', id: 'staff-out', onclick: async () => { S.notAdmin = false; await signOut(); } }, 'Sign out')));
 }
 async function signOut() {
   closeModal();
@@ -1509,12 +1535,12 @@ function setupSW() {
 
 /* ---------- boot ---------- */
 async function loadLocal() {
-  const [uid, email, ...rest] = await Promise.all([IDB.get('meta', 'uid'), IDB.get('meta', 'email'), ...COLLS.map(c => IDB.all(c)), IDB.all('outbox'), IDB.all('blobs')]);
+  const [uid, email, notAdmin, ...rest] = await Promise.all([IDB.get('meta', 'uid'), IDB.get('meta', 'email'), IDB.get('meta', 'notAdmin'), ...COLLS.map(c => IDB.all(c)), IDB.all('outbox'), IDB.all('blobs')]);
   COLLS.forEach((c, i) => { M[c].clear(); for (const [k, v] of rest[i]) M[c].set(k, v); });
   S.outbox = new Map(rest[COLLS.length]);
   for (const [path, b] of rest[COLLS.length + 1]) S.blobUrls.set(path, URL.createObjectURL(new Blob([b.data], { type: b.type })));
   for (const e of S.outbox.values()) stamp = Math.max(stamp, e.v || 0);
-  S.uid = uid || null; S.email = email || '';
+  S.uid = uid || null; S.email = email || ''; S.notAdmin = notAdmin === true;
   refreshArrays();
   S.draft = newDraft();
 }
