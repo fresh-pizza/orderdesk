@@ -9,7 +9,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   bucket: 'photos',
 };
-const VERSION = '1.4.0';
+const VERSION = '1.5.0';
 const COLLS = ['menu', 'customers', 'orders', 'settings', 'purchases'];
 const DEFAULT_SETTINGS = { id: 'main', name: 'My kitchen', currency: '¥', deliveryFee: 0, addresses: [] };
 
@@ -202,9 +202,10 @@ const MAP = {
     from: x => ({ id: x.id, day: x.day, item: x.item, qty: num(x.qty), unit: x.unit || '', cost: num(x.cost), note: x.note || '', photos: Array.isArray(x.photos) ? x.photos : [], createdAt: toMs(x.created_at), deleted: !!x.deleted }),
   },
   settings: {
-    to: r => Object.assign({ id: S.uid, name: r.name || 'My kitchen', currency: r.currency ?? '¥', delivery_fee: num(r.deliveryFee), deleted: false },
+    to: r => Object.assign({ id: 'business', name: r.name || 'My kitchen', currency: r.currency ?? '¥', delivery_fee: num(r.deliveryFee), deleted: false },
       r.addrTouched ? { addresses: r.addresses || [] } : {}),
-    from: x => ({ id: 'main', name: x.name, currency: x.currency, deliveryFee: num(x.delivery_fee), addresses: Array.isArray(x.addresses) ? x.addresses : [], addrTouched: x.addresses !== undefined, deleted: false }),
+    // one shared settings row for the whole team; older per-login rows are ignored
+    from: x => ({ id: x.id === 'business' ? 'main' : '__other', name: x.name, currency: x.currency, deliveryFee: num(x.delivery_fee), addresses: Array.isArray(x.addresses) ? x.addresses : [], addrTouched: x.addresses !== undefined, deleted: false }),
   },
 };
 
@@ -303,6 +304,7 @@ async function pull() {
       const ops = [];
       for (const row of data) {
         const r = MAP[coll].from(row);
+        if (r.id === '__other') continue;
         const pending = S.outbox.get(coll + ':' + r.id);
         if (pending) continue; // a local change is waiting; it wins and will be uploaded
         const cur = M[coll].get(r.id);
@@ -327,7 +329,7 @@ function startRealtime() {
   stopRealtime();
   try {
     channel = sb.channel('od-' + S.uid);
-    for (const t of COLLS) channel.on('postgres_changes', { event: '*', schema: 'public', table: t, filter: 'owner=eq.' + S.uid }, () => Sync.soon(250));
+    for (const t of COLLS) channel.on('postgres_changes', { event: '*', schema: 'public', table: t }, () => Sync.soon(250)); // whole team's changes
     channel.subscribe();
   } catch (_) { channel = null; }
 }
