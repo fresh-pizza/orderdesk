@@ -302,3 +302,9 @@ body{padding-top:env(safe-area-inset-top,0px);-webkit-tap-highlight-color:transp
   #toast{bottom:calc(132px + env(safe-area-inset-bottom,0px))}
 }
 @media (min-width:821px){.icon-btn.gear-m{display:none}}
+/* 1.2: customer pictures */
+img.avatar{object-fit:cover;background:var(--surface2);display:block}
+.avatar.sm{width:24px;height:24px;font-size:12px;flex:none}
+.avatar.big{width:56px;height:56px;font-size:24px;flex:none}
+.who-head{display:flex;align-items:center;gap:12px}
+.sg-name{display:flex;align-items:center;gap:8px;min-width:0}

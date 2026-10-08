@@ -9,7 +9,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   bucket: 'photos',
 };
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 const COLLS = ['menu', 'customers', 'orders', 'settings'];
 const DEFAULT_SETTINGS = { id: 'main', name: 'My kitchen', currency: '¥', deliveryFee: 0 };
 
@@ -168,8 +168,9 @@ const MAP = {
     from: x => ({ id: x.id, name: x.name, category: x.category, description: x.description, variants: x.variants || [], photo: x.photo || '', available: x.available !== false, example: !!x.example, deleted: !!x.deleted }),
   },
   customers: {
-    to: r => ({ id: r.id, name: r.name || '', phone: r.phone || '', address: r.address || '', notes: r.notes || '', created_at: toIso(r.createdAt), deleted: !!r.deleted }),
-    from: x => ({ id: x.id, name: x.name, phone: x.phone, address: x.address, notes: x.notes, createdAt: toMs(x.created_at), deleted: !!x.deleted }),
+    // photo is only sent when there is one, so this works even before the photo column exists
+    to: r => Object.assign({ id: r.id, name: r.name || '', phone: r.phone || '', address: r.address || '', notes: r.notes || '', created_at: toIso(r.createdAt), deleted: !!r.deleted }, r.photo ? { photo: r.photo } : {}),
+    from: x => ({ id: x.id, name: x.name, phone: x.phone, address: x.address, notes: x.notes, photo: x.photo || '', createdAt: toMs(x.created_at), deleted: !!x.deleted }),
   },
   orders: {
     to: r => ({ id: r.id, no: r.no || 0, customer_id: r.customerId || null, customer_name: r.customerName || '', phone: r.phone || '', address: r.address || '', type: r.type || 'delivery', items: r.items || [], subtotal: num(r.subtotal), fee: num(r.fee), total: num(r.total), note: r.note || '', status: r.status || 'new', created_at: toIso(r.createdAt), deleted: !!r.deleted }),
@@ -363,6 +364,13 @@ const priceText = it => {
   const lo = Math.min(...v), hi = Math.max(...v);
   return lo === hi ? money(lo) : money(lo) + ' – ' + money(hi);
 };
+function avatar(c, cls) {
+  const ph = () => el('div', { class: 'avatar' + (cls ? ' ' + cls : ''), style: '--h:' + hue(c.name), text: initial(c.name) });
+  if (!c.photo) return ph();
+  const im = el('img', { class: 'avatar' + (cls ? ' ' + cls : ''), src: photoUrl(c.photo), alt: '', loading: 'lazy', decoding: 'async' });
+  im.addEventListener('error', () => im.replaceWith(ph()));
+  return im;
+}
 function placeholder(name) { return el('div', { class: 'ph', style: '--h:' + hue(name), 'aria-hidden': 'true', text: initial(name) }); }
 function thumb(item, cls) {
   if (item.photo) {
@@ -551,7 +559,7 @@ function refreshCustomerBits() {
       (phoneQ.length >= 3 && (c.phone || '').replace(/\s/g, '').includes(phoneQ))).slice(0, 5);
   }
   N.suggest.replaceChildren(...(hits.length ? [el('div', { class: 'suggest' }, hits.map(c =>
-    el('button', { type: 'button', onclick: () => pickCustomer(c) }, el('span', { text: c.name }), el('span', { class: 'sub', text: c.phone || '' }))))] : []));
+    el('button', { type: 'button', onclick: () => pickCustomer(c) }, el('span', { class: 'sg-name' }, avatar(c, 'sm'), el('span', { text: c.name })), el('span', { class: 'sub', text: c.phone || '' }))))] : []));
 }
 function pickCustomer(c) {
   Object.assign(S.draft, { customerId: c.id, name: c.name || '', phone: c.phone || '', address: c.address || '' });
@@ -806,7 +814,7 @@ function customerResults(root) {
   root.append(el('div', { class: 'clist' }, list.slice(0, 300).map(c => {
     const s = stats.get(c.id);
     return el('button', { class: 'crow', type: 'button', onclick: () => customerModal(c) },
-      el('div', { class: 'avatar', style: '--h:' + hue(c.name), text: initial(c.name) }),
+      avatar(c),
       el('div', {}, el('div', { class: 'nm', text: c.name }), el('div', { class: 'meta', text: [c.phone, c.address].filter(Boolean).join(' · ') })),
       el('div', { class: 'meta', style: 'text-align:right' }, s ? `${s.n} order${s.n === 1 ? '' : 's'} · ${money(s.spent)}` : 'No orders', el('br'), s ? 'last ' + ago(s.last) : ''));
   })));
@@ -820,10 +828,10 @@ function customerModal(c) {
     el(tag || 'input', Object.assign({ id, value: m[key] || '', oninput: e => { m[key] = e.target.value; } }, attrs)));
   async function save() {
     if (!(m.name || '').trim() && !(m.phone || '').trim()) return toast('Add a name or phone number.', true);
-    const rec = { id: c ? c.id : newId(), name: (m.name || '').trim() || 'Customer', phone: (m.phone || '').trim(), address: (m.address || '').trim(), notes: (m.notes || '').trim(), createdAt: c ? (c.createdAt || Date.now()) : Date.now() };
+    const rec = { id: c ? c.id : newId(), name: (m.name || '').trim() || 'Customer', phone: (m.phone || '').trim(), address: (m.address || '').trim(), notes: (m.notes || '').trim(), photo: c ? (c.photo || '') : '', createdAt: c ? (c.createdAt || Date.now()) : Date.now() };
     if (await write(Store.put('customers', rec), 'Saved')) closeModal();
   }
-  openModal(el('div', { class: 'sheet' }, el('h2', { text: c ? c.name : 'Add customer' }),
+  openModal(el('div', { class: 'sheet' }, c ? el('div', { class: 'who-head' }, avatar(c, 'big'), el('h2', { text: c.name })) : el('h2', { text: 'Add customer' }),
     s ? el('div', { class: 'tiles', style: 'margin:0' }, tile('Orders', s.n), tile('Spent', money(s.spent)), tile('Last order', ago(s.last))) : null,
     favs.length ? el('div', {}, el('div', { class: 'sub', style: 'margin-bottom:6px', text: 'Usually orders' }), el('div', { class: 'favs' }, favs.map(([n, q]) => el('span', { class: 'tag', text: `${n} ×${q}` })))) : null,
     el('div', { class: 'row' }, field('k-name', 'Name', 'name'), field('k-phone', 'Phone', 'phone', null, { type: 'tel', inputmode: 'tel' })),
@@ -986,7 +994,7 @@ async function saveBackup() {
     const strip = arr => arr.map(stripV);
     const photos = {};
     let missing = 0;
-    for (const m of S.menu) if (m.photo && !photos[m.photo]) {
+    for (const m of [...S.menu, ...S.customers]) if (m.photo && !photos[m.photo]) {
       const p = await photoBytes(m.photo);
       if (p) photos[m.photo] = { type: p.type, data: b64(p.data) }; else missing++;
     }
@@ -1028,7 +1036,7 @@ async function doRestore(data) {
       for (const r of data[coll] || []) {
         if (!r || !r.id) continue;
         const rec = Object.assign({}, r); delete rec._v;
-        if (coll === 'menu' && rec.photo) rec.photo = remap.get(rec.photo) || (rec.photo.startsWith(S.uid + '/') ? rec.photo : '');
+        if ((coll === 'menu' || coll === 'customers') && rec.photo) rec.photo = remap.get(rec.photo) || (rec.photo.startsWith(S.uid + '/') ? rec.photo : '');
         await Store.put(coll, rec); count++;
       }
     }
