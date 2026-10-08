@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Order Desk</title>
+<meta name="description" content="Orders, menu and customers for the kitchen. Works offline.">
+<meta name="theme-color" content="#F2F4F1" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0F1311" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Order Desk">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="preload" href="hanken-grotesk-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div id="login" hidden></div>
+<div class="app" id="app">
+  <aside class="side">
+    <div class="brand" id="brand">Order Desk</div>
+    <div id="side-sync"></div>
+    <nav class="nav" id="nav" aria-label="Sections"></nav>
+    <div class="grow"></div>
+    <button class="gear desk" id="gear-desk" type="button">Settings</button>
+  </aside>
+  <main id="main" tabindex="-1"><div class="splash">Opening…</div></main>
+</div>
+<div id="modal" hidden></div>
+<div id="toast" role="status" hidden></div>
+<script src="supabase.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
