@@ -11,7 +11,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   phoneDomain: 'phone.orderdesk.app', // phone logins are stored as <digits>@this, no SMS involved
 };
-const SHOP_VERSION = '2.1.0';
+const SHOP_VERSION = '2.2.0';
 /* phones (WeChat especially) keep old copies of web pages; if a newer shop is online, reload it */
 (async function freshness() {
   try {
@@ -193,7 +193,7 @@ function toast(msg, isErr) {
   clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.hidden = true; }, isErr ? 6000 : 2600);
 }
 function openModal(node) { const m = $('#modal'); m.replaceChildren(node); m.hidden = false; }
-function closeModal() { const m = $('#modal'); m.hidden = true; m.replaceChildren(); }
+function closeModal() { S.redrawBasket = null; const m = $('#modal'); m.classList.remove('center'); m.hidden = true; m.replaceChildren(); }
 $('#modal').addEventListener('mousedown', e => { if (e.target.id === 'modal') closeModal(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#modal').hidden) closeModal(); });
 const niceErr = e => {
@@ -215,9 +215,13 @@ const TAB_ICONS = {
 const activeOrders = () => S.orders.filter(o => o.status !== 'done' && o.status !== 'cancelled');
 const unreadMsgs = () => S.msgs.filter(m => m.from_admin && !m.read_at).length;
 function renderTop() {
-  $('#top').replaceChildren(el('button', { class: 'biz', type: 'button', onclick: () => go('menu') }, S.biz.name || 'Order food'));
+  const sub = { checkout: ['Confirm order', 'menu'], details: ['Delivery details', 'checkout'] }[S.view];
+  $('#top').replaceChildren(...(sub ? [
+    el('button', { class: 'back', type: 'button', id: 'top-back', 'aria-label': 'Back', onclick: () => go(sub[1]) }, '‹'),
+    el('div', { class: 'top-title', id: 'top-title', text: sub[0] })]
+    : [el('button', { class: 'biz', type: 'button', onclick: () => go('menu') }, S.biz.name || 'Order food')]));
   document.title = S.biz.name ? `${S.biz.name} · Order` : 'Order food';
-  const tabOf = { menu: 'menu', checkout: 'menu', done: 'orders', orders: 'orders', me: 'me', chat: 'me' }[S.view] || 'menu';
+  const tabOf = { menu: 'menu', checkout: 'menu', details: 'menu', done: 'orders', orders: 'orders', me: 'me', chat: 'me' }[S.view] || 'menu';
   const badge = { orders: activeOrders().length, me: unreadMsgs() };
   $('#tabs').replaceChildren(...[['menu', 'Menu'], ['orders', 'Orders'], ['me', 'Me']].map(([k, l]) => {
     const b = el('button', { type: 'button', id: 'tab-' + k, 'aria-current': tabOf === k ? 'page' : false, onclick: () => go(k) });
@@ -225,7 +229,7 @@ function renderTop() {
     b.append(el('span', { text: l }), badge[k] ? el('span', { class: 'tbadge', text: badge[k] }) : '');
     return b;
   }));
-  document.body.classList.toggle('no-tabs', S.view === 'checkout' || S.view === 'chat');
+  document.body.classList.toggle('no-tabs', S.view === 'checkout' || S.view === 'details' || S.view === 'chat');
 }
 /* account: who is signed in */
 function whoAmI() {
@@ -292,7 +296,7 @@ function render() {
   const main = $('#main');
   main.replaceChildren();
   if (!S.loaded) { main.append(el('div', { class: 'splash', text: S.loadErr || 'Loading the menu…' })); renderBar(); return; }
-  ({ menu: viewMenu, checkout: viewCheckout, orders: viewOrders, done: viewDone, me: viewMe, chat: viewChat })[S.view](main);
+  ({ menu: viewMenu, checkout: viewCheckout, details: viewDetails, orders: viewOrders, done: viewDone, me: viewMe, chat: viewChat })[S.view](main);
   renderBar();
 }
 
@@ -377,7 +381,7 @@ function dishSheet(m) {
     el('div', { class: 'dd-top' }, el('button', { class: 'dd-round ds-x', type: 'button', 'aria-label': 'Close', onclick: closeModal }, '⌄')),
     scroller,
     el('div', { class: 'dd-bar shop' },
-      iconBtn('🛍', 'Basket', () => { closeModal(); if (basketCount()) go('checkout'); }, n || null),
+      iconBtn('🛍', 'Basket', () => { closeModal(); basketSheet(); }, n || null),
       S.msgsOff ? null : iconBtn('💬', 'Ask us', () => { closeModal(); openChat(null); }),
       m.available === false ? el('div', { class: 'dd-soldout', text: 'Sold out today' }) : el('div', { class: 'dd-buy' },
         el('button', { class: 'dd-add', type: 'button', id: 'ds-add', onclick: () => add() }, 'Add to basket'),
@@ -451,15 +455,59 @@ function dishCard(m) {
   const pic = m.photo ? el('img', { class: 'img', src: publicUrl(m.photo), alt: m.name, loading: 'lazy' }) : el('div', { class: 'ph', style: '--h:' + hue(m.name), 'aria-hidden': 'true', text: initial(m.name) });
   if (m.photo) pic.addEventListener('error', () => pic.replaceWith(el('div', { class: 'ph', style: '--h:' + hue(m.name), text: initial(m.name) })));
   const r = ratingOf(m.id);
-  return el('article', { class: 'dish' + (m.available === false ? ' off' : ''), 'data-id': m.id, tabindex: '0', onclick: e => { if (!e.target.closest('.add')) dishSheet(m); } }, pic,
+  return el('article', { class: 'dish' + (m.available === false ? ' off' : ''), 'data-id': m.id, tabindex: '0', onclick: e => { if (!e.target.closest('.add, .add-step')) dishSheet(m); } }, pic,
     el('div', { class: 'body' },
       el('h3', {}, m.name, hasNight() ? el('span', { class: 'svc-ic ' + svcOf(m), title: svcOf(m) === 'night' ? 'Night dish' : 'Day dish', text: svcOf(m) === 'night' ? '🌙' : '☀' }) : null),
       r ? el('div', { class: 'rating', text: `★ ${r.avg} (${r.n})` }) : null,
       m.description ? el('div', { class: 'desc', text: m.description }) : null,
       (m.windows || []).length ? el('div', { class: 'win', text: '🕒 ' + m.windows.map(winLabel).join(', ') }) : null,
       el('div', { class: 'foot' }, el('span', { class: 'price', text: vs.length ? (lo === hi ? money(lo) : `${money(lo)} – ${money(hi)}`) : '' }),
-        m.available === false ? el('span', { class: 'fineprint', text: 'Sold out' })
-          : el('button', { class: 'add' + (inB ? ' in' : ''), type: 'button', 'aria-label': `Add ${m.name}`, onclick: () => addDish(m) }, inB ? `${inB} ✓` : '+'))));
+        m.available === false ? el('span', { class: 'fineprint', text: 'Sold out' }) : addControl(m, inB))));
+}
+/* + on the menu card: with one size it becomes  − 2 +  once added; with sizes it asks which size and shows the count */
+function addControl(m, inB) {
+  const sizes = (m.variants || []).length;
+  if (inB && sizes <= 1) {
+    const v = ((m.variants || [])[0] || {}).label || '';
+    return el('div', { class: 'add-step', 'data-id': m.id },
+      el('button', { type: 'button', class: 'as-minus', 'aria-label': `One less ${m.name}`, onclick: () => changeQty(m.id, v, -1) }, '−'),
+      el('span', { class: 'as-n', text: inB }),
+      el('button', { type: 'button', class: 'as-plus', 'aria-label': `One more ${m.name}`, onclick: () => changeQty(m.id, v, 1) }, '+'));
+  }
+  return el('button', { class: 'add', type: 'button', 'aria-label': `Add ${m.name}`, onclick: () => addDish(m) }, '+', inB ? el('span', { class: 'add-n', text: inB }) : null);
+}
+/* one place that changes a quantity: the menu card, the basket sheet */
+function changeQty(menuId, variant, delta) {
+  const i = S.basket.findIndex(l => l.menuId === menuId && l.variant === (variant || ''));
+  if (i < 0) return;
+  S.basket[i].qty += delta; if (S.basket[i].qty <= 0) S.basket.splice(i, 1);
+  saveBasket(); render(); if (S.redrawBasket) S.redrawBasket();
+}
+/* the basket: tap the cart on the menu. Change quantities here, then go to checkout */
+function basketSheet() {
+  if (!basketCount()) return;
+  const sheet = el('div', { class: 'sheet basket-sheet' });
+  let sure = false;
+  const draw = () => {
+    if (!basketCount()) { S.redrawBasket = null; closeModal(); return; }
+    const lines = S.basket.map(l => {
+      const m = dish(l.menuId); if (!m) return null;
+      return el('div', { class: 'line', 'data-id': l.menuId },
+        el('div', { class: 'nm' }, m.name, l.variant ? el('small', { text: ' · ' + l.variant }) : null),
+        el('div', { class: 'qty' },
+          el('button', { type: 'button', 'aria-label': 'One less', onclick: () => changeQty(l.menuId, l.variant, -1) }, '−'),
+          el('span', { text: l.qty }),
+          el('button', { type: 'button', 'aria-label': 'One more', onclick: () => changeQty(l.menuId, l.variant, 1) }, '+')),
+        el('div', { class: 'pr', text: money(priceOf(m, l.variant) * l.qty) }));
+    }).filter(Boolean);
+    sheet.replaceChildren(
+      el('div', { class: 'bs-head' }, el('h2', { text: 'Your basket' }),
+        el('button', { class: 'link', type: 'button', id: 'bs-clear', onclick: () => { if (!sure) { sure = true; draw(); return; } S.basket = []; saveBasket(); S.redrawBasket = null; closeModal(); render(); } }, sure ? 'Tap again to clear' : 'Clear')),
+      el('div', { class: 'bs-list' }, ...lines),
+      el('div', { class: 'bs-foot' }, el('div', { class: 'bs-total' }, el('span', { text: 'Total' }), el('b', { id: 'bs-total', text: money(basketTotal()) })),
+        el('button', { class: 'btn primary', type: 'button', id: 'bs-checkout', onclick: () => { S.redrawBasket = null; closeModal(); go('checkout'); } }, 'Checkout')));
+  };
+  S.redrawBasket = draw; draw(); openModal(sheet);
 }
 function addDish(m) {
   // day and night dishes are separate orders
@@ -487,6 +535,7 @@ function addDish(m) {
 function renderBar() {
   const n = basketCount();
   const bar = $('#bar');
+  if (S.view === 'checkout' || S.view === 'details') return renderCheckoutBar(bar);
   if (!n || S.view !== 'menu') { bar.replaceChildren(); return; }
   const d = S.draft, fee = d.type === 'pickup' ? null : addrFee(d.address);
   const feeLine = d.type === 'pickup' ? 'Pickup · no delivery fee'
@@ -494,10 +543,10 @@ function renderBar() {
   const t = money(basketTotal()), cur = S.biz.currency || '';
   const icon = el('span', { class: 'cart-svg', 'aria-hidden': 'true' });
   icon.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8h14l-1.3 11.2a2 2 0 0 1-2 1.8H8.3a2 2 0 0 1-2-1.8z"/><path d="M9 10V7a3 3 0 0 1 6 0v3"/></svg>';
-  const toCheckout = () => go('checkout');
+  const toCheckout = () => go('checkout'), toBasket = () => basketSheet();
   bar.replaceChildren(el('div', { class: 'cartbar' },
-    el('button', { class: 'cart-ic', type: 'button', 'aria-label': `Basket, ${n} item${n === 1 ? '' : 's'}`, onclick: toCheckout }, icon, el('span', { class: 'cart-badge', text: n > 99 ? '99+' : n })),
-    el('button', { class: 'cart-sum', type: 'button', onclick: toCheckout },
+    el('button', { class: 'cart-ic', type: 'button', id: 'cart-open', 'aria-label': `Basket, ${n} item${n === 1 ? '' : 's'}`, onclick: toBasket }, icon, el('span', { class: 'cart-badge', text: n > 99 ? '99+' : n })),
+    el('button', { class: 'cart-sum', type: 'button', id: 'cart-sum', onclick: toBasket },
       el('b', { class: 'cart-total' }, t.startsWith(cur) && cur ? [el('small', { text: cur }), t.slice(cur.length)] : t),
       el('small', { class: 'cart-fee', text: feeLine })),
     el('button', { class: 'cart-go', type: 'button', id: 'go-checkout', onclick: toCheckout }, 'Checkout')));
@@ -523,6 +572,19 @@ function orderWindows() {
   if (withWin.length) list = list.filter(x => withWin.every(m => m.windows.some(w => winLabel(w) === x)));
   return { list: list.sort(), clash: withWin.length > 0 && !list.length };
 }
+/* checkout, laid out like Meituan: where to, when, what, how much. Address, name and phone live on their own page. */
+const thumb = m => {
+  const ph = () => el('div', { class: 'ph', style: '--h:' + hue(m.name), 'aria-hidden': 'true', text: initial(m.name) });
+  if (!m.photo) return ph();
+  const im = el('img', { src: publicUrl(m.photo), alt: '', loading: 'lazy' });
+  im.addEventListener('error', () => im.replaceWith(ph()));
+  return im;
+};
+const chevR = () => el('span', { class: 'co-chev', 'aria-hidden': 'true', text: '›' });
+function checkoutNumbers() {
+  const d = S.draft;
+  return { sub: basketTotal(), fee: d.type === 'delivery' ? (addrFee(d.address) || 0) : 0 };
+}
 function viewCheckout(root) {
   const d = S.draft;
   if (!basketCount()) { root.append(el('div', { class: 'empty' }, el('b', { text: 'Your basket is empty' }), el('button', { class: 'btn primary', type: 'button', onclick: () => go('menu') }, 'Back to the menu'))); return; }
@@ -536,59 +598,114 @@ function viewCheckout(root) {
   if (!d.slotDate || !dates.includes(d.slotDate)) d.slotDate = dates[0];
   const list = d.slotDate === now.day ? todayOpen : all;
   if (d.slot && !list.includes(d.slot)) d.slot = '';
-  const sub = basketTotal(), fee = d.type === 'delivery' ? (addrFee(d.address) || 0) : 0;
-  const lines = S.basket.map((l, i) => {
+  const { sub, fee } = checkoutNumbers();
+  const delivery = d.type === 'delivery';
+  const who = [(d.name || '').trim(), (d.phone || '').trim()].filter(Boolean).join('   ');
+  const needAddr = delivery && !d.address, needName = !(d.name || '').trim();
+  S.checkoutClash = clash;
+  const items = S.basket.map(l => {
     const m = dish(l.menuId); if (!m) return null;
-    return el('div', { class: 'line' },
-      el('div', { class: 'nm' }, m.name, l.variant ? el('small', { text: ' · ' + l.variant }) : null),
-      el('div', { class: 'qty' },
-        el('button', { type: 'button', 'aria-label': 'One less', onclick: () => { l.qty--; if (l.qty <= 0) S.basket.splice(i, 1); saveBasket(); render(); } }, '−'),
-        el('span', { text: l.qty }),
-        el('button', { type: 'button', 'aria-label': 'One more', onclick: () => { l.qty++; saveBasket(); render(); } }, '+')),
-      el('div', { class: 'pr', text: money(priceOf(m, l.variant) * l.qty) }));
-  });
-  const fld = (id, label, key, attrs) => el('div', { class: 'field' }, el('label', { for: id, text: label }),
-    el('input', Object.assign({ id, value: d[key] || '', oninput: e => { d[key] = e.target.value; store.set('draft', d); } }, attrs)));
-  const err = el('div', { class: 'err', role: 'alert' });
+    return el('div', { class: 'co-item', 'data-id': l.menuId },
+      el('div', { class: 'co-thumb' }, thumb(m)),
+      el('div', { class: 'co-item-mid' }, el('b', { text: m.name }), el('small', { text: [l.variant, '×' + l.qty].filter(Boolean).join(' · ') })),
+      el('div', { class: 'co-item-pr', text: money(priceOf(m, l.variant) * l.qty) }));
+  }).filter(Boolean);
   root.append(
-    el('div', { class: 'box' }, el('h2', {}, el('span', { class: 'stepn', text: '1' }), 'Your order'), lines,
-      el('button', { class: 'link', type: 'button', style: 'align-self:flex-start', onclick: () => go('menu') }, '+ Add more')),
-    el('div', { class: 'box' }, el('h2', {}, el('span', { class: 'stepn', text: '2' }), S.biz.pickup ? 'Delivery or pickup' : 'Delivery'),
-      S.biz.pickup ? el('div', { class: 'seg', role: 'group', 'aria-label': 'Delivery or pickup' }, [['delivery', 'Delivery'], ['pickup', 'Pickup']].map(([k, lbl]) =>
-        el('button', { type: 'button', 'aria-pressed': d.type === k, onclick: () => { d.type = k; render(); } }, lbl))) : null,
-      d.type === 'delivery' ? el('div', { class: 'field' }, el('label', { for: 'c-addr', text: 'Delivery address' }),
-        el('select', { id: 'c-addr', onchange: e => { d.address = e.target.value; render(); } },
-          el('option', { value: '', text: 'Choose your address…' }),
-          (S.biz.addresses || []).map(a => el('option', { value: a.name, selected: a.name === d.address, text: `${a.name}${feeOf(a, basketPizza()) ? ' · delivery fee' : ' · free delivery'}` })))) : null,
-      el('div', { class: 'field' }, el('label', { text: d.type === 'delivery' ? 'Delivery time' : 'Pickup time' }),
-        el('div', { class: list.length ? 'two' : '' },
+    el('section', { class: 'co-card co-top' },
+      S.biz.pickup ? el('div', { class: 'co-tabs', role: 'group', 'aria-label': 'Delivery or pickup' }, [['delivery', 'Delivery'], ['pickup', 'Pickup']].map(([k, lbl]) =>
+        el('button', { type: 'button', id: 'co-' + k, 'aria-pressed': d.type === k, onclick: () => { d.type = k; store.set('draft', d); render(); } }, lbl))) : null,
+      el('button', { class: 'co-info', type: 'button', id: 'co-info', onclick: () => go('details') },
+        el('div', { class: 'co-info-main' },
+          el('b', { class: 'co-addr' + (needAddr ? ' need' : ''), id: 'co-addr', text: delivery ? (d.address || 'Choose delivery address') : (S.biz.name ? `Pick up at ${S.biz.name}` : 'Pick up at the kitchen') }),
+          el('div', { class: 'co-who' + (needName ? ' need' : ''), id: 'co-who', text: who || 'Add your name and phone' })),
+        chevR()),
+      el('div', { class: 'co-time' }, el('span', { class: 'co-lbl', text: delivery ? 'Delivery time' : 'Pickup time' }),
+        el('div', { class: 'co-pickers' + (list.length ? ' two' : '') },
           el('select', { id: 'c-day', 'aria-label': 'Day', onchange: e => { d.slotDate = e.target.value; render(); } }, dates.map(x => el('option', { value: x, selected: x === d.slotDate, text: dayLabel(x) }))),
           list.length ? el('select', { id: 'c-slot', 'aria-label': 'Time', onchange: e => { d.slot = e.target.value; } },
-            el('option', { value: '', text: 'Choose time', disabled: true, selected: !d.slot }), list.map(x => el('option', { value: x, selected: x === d.slot, text: x }))) : null),
-        all.length && !todayOpen.length ? el('div', { class: 'fineprint', id: 'c-tomorrow', text: 'Today\'s times have passed, so the earliest is tomorrow.' }) : null,
-        clash ? el('div', { class: 'err', text: 'These dishes are served at different times. Please order them separately.' }) : null)),
-    el('div', { class: 'box' }, el('h2', {}, el('span', { class: 'stepn', text: '3' }), 'Your details'),
-      fld('c-name', 'Name', 'name', Object.assign({ autocomplete: 'nickname', placeholder: 'Your WeChat name', maxlength: 80 }, isLinked() ? { readonly: true } : {})),
-      isLinked() ? el('div', { class: 'fineprint', style: 'margin-top:-6px', text: `${S.biz.name || 'The kitchen'} knows you by this name.` }) : null,
-      isLinked() ? null : el('div', { class: 'fineprint', style: 'margin-top:-6px', text: 'Preferably your WeChat name: it makes it easy to track and deliver your parcel correctly.' }),
-      fld('c-phone', 'Phone (optional)', 'phone', { type: 'tel', inputmode: 'tel', autocomplete: 'tel', placeholder: 'Optional' }),
-      el('div', { class: 'field' }, el('label', { for: 'c-note', text: 'Note for the kitchen (optional)' }),
-        el('textarea', { id: 'c-note', value: d.note || '', placeholder: 'Less spicy, extra raita…', oninput: e => { d.note = e.target.value; store.set('draft', d); } }))),
-    el('div', { class: 'box sumbox' },
-      el('div', { class: 'sumrow' }, el('span', { text: 'Items' }), el('span', { text: money(sub) })),
-      d.type === 'delivery' ? el('div', { class: 'sumrow' }, el('span', { text: 'Delivery' + (d.address ? ' · ' + d.address : '') }), el('span', { text: d.address ? feeText(fee) : '–' })) : null,
-      el('div', { class: 'sumrow total' }, el('span', { text: 'Total' }), el('span', { id: 'c-total', text: money(sub + fee) })),
-      el('div', { class: 'fineprint', text: 'Pay by WeChat Pay or Alipay, now or later. We start cooking once payment is confirmed. To change or cancel an order, message us.' }),
-      err,
-      el('button', { class: 'btn primary big-btn', type: 'button', id: 'c-place', disabled: clash, onclick: () => placeOrder(err) }, S.session ? 'Place order' : 'Continue')));
+            el('option', { value: '', text: 'Choose time', disabled: true, selected: !d.slot }), list.map(x => el('option', { value: x, selected: x === d.slot, text: x }))) : null)),
+      all.length && !todayOpen.length ? el('div', { class: 'fineprint co-fine', id: 'c-tomorrow', text: 'Today\'s times have passed, so the earliest is tomorrow.' }) : null,
+      clash ? el('div', { class: 'err co-fine', text: 'These dishes are served at different times. Please order them separately.' }) : null),
+    el('section', { class: 'co-card co-items' },
+      el('div', { class: 'co-shop' }, el('b', { text: S.biz.name || 'Your order' }), el('span', { text: `${basketCount()} item${basketCount() === 1 ? '' : 's'}` })),
+      ...items,
+      el('div', { class: 'co-sum' },
+        el('div', { class: 'co-row' }, el('span', { text: 'Items' }), el('span', { text: money(sub) })),
+        delivery ? el('div', { class: 'co-row' }, el('span', { text: 'Delivery fee' + (d.address ? ' · ' + d.address : '') }), el('span', { text: d.address ? feeText(fee) : '–' })) : null)),
+    el('section', { class: 'co-card co-notecard' },
+      el('label', { class: 'co-lbl', for: 'c-note', text: 'Note' }),
+      el('input', { id: 'c-note', type: 'text', maxlength: 300, value: d.note || '', placeholder: 'Less spicy, extra raita…', enterkeyhint: 'done', autocomplete: 'off', oninput: e => { d.note = e.target.value; store.set('draft', d); } })),
+    el('p', { class: 'fineprint co-pay', text: 'Pay by WeChat Pay or Alipay, now or later. We start cooking once payment is confirmed. To change or cancel an order, message us.' }));
+}
+/* address, name and phone on one compact page */
+function viewDetails(root) {
+  const d = S.draft;
+  if (!S.biz.pickup) d.type = 'delivery';
+  const row = (id, label, ctrl, extra) => el('div', { class: 'dt-row' }, el('label', { for: id, text: label }), el('div', { class: 'dt-ctl' }, ctrl, extra || null));
+  const inp = (id, key, attrs) => el('input', Object.assign({ id, value: d[key] || '', oninput: e => { d[key] = e.target.value; store.set('draft', d); } }, attrs));
+  root.append(
+    el('section', { class: 'co-card dt-card' },
+      d.type === 'delivery' ? row('c-addr', 'Address', el('select', { id: 'c-addr', onchange: e => { d.address = e.target.value; store.set('draft', d); } },
+        el('option', { value: '', text: 'Choose your address…' }),
+        (S.biz.addresses || []).map(a => el('option', { value: a.name, selected: a.name === d.address, text: `${a.name}${feeOf(a, basketPizza()) ? ' · delivery fee' : ' · free delivery'}` })))) : null,
+      row('c-name', 'Name', inp('c-name', 'name', Object.assign({ autocomplete: 'nickname', placeholder: 'Your WeChat name', maxlength: 80 }, isLinked() ? { readonly: true } : {})),
+        el('small', { class: 'dt-hint', text: isLinked() ? `${S.biz.name || 'The kitchen'} knows you by this name.` : 'Preferably your WeChat name: it makes it easy to track and deliver your parcel correctly.' })),
+      row('c-phone', 'Phone', inp('c-phone', 'phone', { type: 'tel', inputmode: 'tel', autocomplete: 'tel', placeholder: 'Optional', maxlength: 30 }))));
+}
+function renderCheckoutBar(bar) {
+  const d = S.draft;
+  if (S.view === 'details') {
+    bar.replaceChildren(el('div', { class: 'cobar' }, el('div', { class: 'cobar-in' },
+      el('button', { class: 'co-place wide', type: 'button', id: 'details-save', onclick: () => go('checkout') }, 'Save'))));
+    return;
+  }
+  if (!basketCount()) { bar.replaceChildren(); return; }
+  const { sub, fee } = checkoutNumbers();
+  const err = el('div', { class: 'co-err err', id: 'co-err', role: 'alert' });
+  bar.replaceChildren(el('div', { class: 'cobar' }, err, el('div', { class: 'cobar-in' },
+    el('div', { class: 'co-tot' }, el('b', { id: 'c-total', text: money(sub + fee) }),
+      el('small', { text: d.type === 'delivery' ? `Items ${money(sub)} + delivery ${d.address ? feeText(fee) : '–'}` : `Items ${money(sub)} · pickup` })),
+    el('button', { class: 'co-place', type: 'button', id: 'c-place', disabled: !!S.checkoutClash, onclick: () => placeOrder(err) }, S.session ? 'Place order' : 'Continue'))));
 }
 async function placeOrder(err) {
   const d = S.draft;
   err.textContent = '';
   if (d.type === 'delivery' && addrFee(d.address) === null) { err.textContent = 'Choose your delivery address.'; return; }
   if (orderWindows().list.length && !d.slot) { err.textContent = `Choose a ${d.type === 'delivery' ? 'delivery' : 'pickup'} time.`; return; }
-  if (!(d.name || '').trim()) { err.textContent = 'Please add your name (your WeChat name is best).'; $('#c-name').focus(); return; }
+  if (!(d.name || '').trim()) { err.textContent = 'Please add your name (your WeChat name is best).'; return; }
   if (!S.session) { authSheet(() => placeOrder(err)); return; }
+  confirmSheet(err);
+}
+/* the last look before sending: where, when, what, how much */
+function confirmSheet(err) {
+  const d = S.draft, delivery = d.type === 'delivery', { sub, fee } = checkoutNumbers();
+  const when = [dayLabel(d.slotDate) || 'Today', d.slot].filter(Boolean).join(' · ');
+  const rows = S.basket.map(l => {
+    const m = dish(l.menuId); if (!m) return null;
+    return el('div', { class: 'cf-item' },
+      el('div', { class: 'co-thumb' }, thumb(m)),
+      el('div', { class: 'co-item-mid' }, el('b', { text: m.name }), el('small', { text: [l.variant, '×' + l.qty].filter(Boolean).join(' · ') })),
+      el('div', { class: 'co-item-pr', text: money(priceOf(m, l.variant) * l.qty) }));
+  }).filter(Boolean);
+  const go1 = el('button', { class: 'btn primary cf-go', type: 'button', id: 'cf-confirm', onclick: () => { closeModal(); placeNow(err); } }, `Confirm order · ${money(sub + fee)}`);
+  const sheet = el('div', { class: 'sheet confirm' },
+    el('button', { class: 'cf-x', type: 'button', id: 'cf-close', 'aria-label': 'Close', onclick: closeModal }, '✕'),
+    el('h2', { text: 'Confirm order' }),
+    el('div', { class: 'cf-box' },
+      el('div', { class: 'cf-k', text: delivery ? 'Deliver to' : 'Pickup' }),
+      delivery ? el('b', { class: 'cf-v', text: d.address }) : null,
+      el('div', { class: 'cf-s', text: [(d.name || '').trim(), (d.phone || '').trim()].filter(Boolean).join('   ') }),
+      el('div', { class: 'cf-s', text: when })),
+    el('div', { class: 'cf-list' }, ...rows),
+    el('div', { class: 'cf-sum' },
+      el('div', { class: 'co-row' }, el('span', { text: 'Items' }), el('span', { text: money(sub) })),
+      delivery ? el('div', { class: 'co-row' }, el('span', { text: 'Delivery fee' }), el('span', { text: feeText(fee) })) : null,
+      (d.note || '').trim() ? el('div', { class: 'co-row' }, el('span', { text: 'Note' }), el('span', { class: 'cf-note', text: d.note.trim() })) : null),
+    go1);
+  openModal(sheet); $('#modal').classList.add('center');
+}
+async function placeNow(err) {
+  const d = S.draft;
   const btn = $('#c-place'); btn.disabled = true; btn.textContent = 'Placing your order…';
   try {
     const { data, error } = await sb.rpc('place_order', { p: {
@@ -608,7 +725,7 @@ async function placeOrder(err) {
     // the account was deleted by the kitchen: the old login still opens the door, the database refuses
     if (/_owner_fkey|_client_id_fkey|violates foreign key/i.test(em) || (/jwt|PGRST301/i.test(em) && !(await checkAccountAlive()))) {
       if (S.session) await removedSignOut();
-      err.textContent = ''; setTimeout(() => authSheet(() => placeOrder(err)), 300); return;
+      err.textContent = ''; btn.disabled = false; btn.textContent = 'Place order'; setTimeout(() => authSheet(() => placeOrder(err)), 300); return;
     }
     err.textContent = niceErr(e); btn.disabled = false; btn.textContent = 'Place order';
   }
@@ -874,6 +991,7 @@ function payModal(o, fresh) {
   }
   if (way) drawWay(); else drawChoose();
   openModal(sheet);
+  if (fresh) $('#modal').classList.add('center');
 }
 const pad3 = n => String(n || 0).padStart(3, '0');
 
