@@ -9,7 +9,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   bucket: 'photos',
 };
-const VERSION = '2.8.1';
+const VERSION = '2.9.0';
 const COLLS = ['menu', 'customers', 'orders', 'settings', 'purchases'];
 const DEFAULT_SETTINGS = { id: 'main', name: 'My kitchen', currency: '¥', deliveryFee: 0, addresses: [], wechatQr: '', alipayQr: '', wechatId: '', alipayId: '', pickup: true, inventory: {} };
 
@@ -851,12 +851,13 @@ function orderSheet(o0) {
     el('div', { class: 'od-acts' }, orderActions(o, again)),
     el('section', { class: 'od-sect od-who' },
       el('div', { class: 'who-head' }, whoAvatar(o, 'big'), el('div', { style: 'min-width:0' }, el('b', { text: o.customerName || 'Walk-in' }), o.phone ? el('div', { class: 'sub', text: o.phone }) : null,
-        el('div', { class: 'login-tag', text: loginText(o) || (o.source === 'shop' ? 'Shop customer' : 'Order taken by you') }))),
+        el('div', { class: 'login-tag', text: loginText(o) || (o.source === 'shop' ? 'Shop customer' : 'Order taken by you') }), acctBits(o, again))),
       el('div', { class: 'btns' },
         o.phone ? el('a', { class: 'btn small', href: 'tel:' + o.phone.replace(/[^\d+]/g, '') }, '📞 Call') : null,
         o.phone ? el('button', { class: 'btn small', type: 'button', onclick: () => copyText(o.phone) }, 'Copy number') : null,
         o.clientId ? el('button', { class: 'btn small', type: 'button', id: 'od-msg', onclick: () => chatSheet(o.clientId, o.no) }, '💬 Message' + (unread ? ` (${unread})` : '')) : null,
-        o.clientId && o.clientLogin === 'guest' ? el('button', { class: 'btn small link-btn', type: 'button', id: 'od-link', onclick: () => linkSheet(o) }, isLinked(o) ? '🔗 Linked · change' : '🔗 Link to customer') : null),
+        o.clientId && o.source === 'shop' ? el('button', { class: 'btn small link-btn', type: 'button', id: 'od-link', onclick: () => linkSheet(o) }, isLinked(o) ? '🔗 Linked · change' : '🔗 Link to customer') : null,
+        hasPassword(o) ? el('button', { class: 'btn small', type: 'button', id: 'od-reset', onclick: () => resetPwSheet(o) }, '🔑 Reset password') : null),
       o.type === 'delivery' ? el('div', { class: 'od-row' }, el('span', { class: 'sub', text: 'Deliver to' }), el('b', { text: o.address || '—' })) : el('div', { class: 'od-row' }, el('span', { class: 'sub', text: 'Pickup' }), el('b', { text: 'At the kitchen' })),
       el('div', { class: 'od-row' }, el('span', { class: 'sub', text: 'Time' }), el('b', { text: slotText(o) || [dayLabel(o.slotDate || isoDay(o.createdAt)), o.slot].filter(Boolean).join(' · ') || 'Not set' }))),
     el('section', { class: 'od-sect' }, el('h3', { text: 'Items' }), el('ul', { class: 'lines' }, itemLines(o)),
@@ -869,7 +870,42 @@ function orderSheet(o0) {
       !isCancelled(o) && !isNew(o) && o.status !== 'accepted' && !isComplete(o) ? confirmBtn('Cancel order', 'Cancel it?', async () => { await setStatus(o, 'cancelled'); again(); }, 'danger left') : null,
       el('button', { class: 'btn', type: 'button', onclick: closeModal }, 'Close'))));
 }
-/* Link: connect a shop account (guest) to one of your customers */
+/* phone / email accounts: Verified status and password reset (needs internet) */
+const hasPassword = o => !!(o.clientId && o.clientLogin && o.clientLogin !== 'guest');
+function acctBits(o, again) {
+  const box = el('div', { class: 'acct-bits' });
+  if (!hasPassword(o) || !sb || navigator.onLine === false) return box;
+  sb.from('accounts').select('verified').eq('user_id', o.clientId).limit(1).then(({ data, error }) => {
+    if (error) return;
+    const v = !!(data && data[0] && data[0].verified);
+    box.replaceChildren(el('span', { class: 'vtag' + (v ? ' ok' : ''), id: 'od-vtag', text: v ? '✓ Verified' : 'Unverified' }),
+      el('button', { class: 'link', type: 'button', id: 'od-verify', onclick: async () => {
+        const { error: e } = await sb.rpc('set_account_verified', { p_user: o.clientId, p_verified: !v });
+        if (e) return toast('Could not change: ' + e.message, true);
+        toast(v ? 'Marked unverified' : 'Marked verified'); again();
+      } }, v ? 'Mark unverified' : 'Mark verified'));
+  }, () => {});
+  return box;
+}
+function resetPwSheet(o) {
+  const pw = el('input', { id: 'rp-pw', type: 'text', inputmode: 'numeric', autocomplete: 'off', value: String(Math.floor(100000 + Math.random() * 900000)) });
+  const body = el('div', { style: 'display:flex;flex-direction:column;gap:10px' },
+    el('div', { class: 'sub', text: `New password for ${o.customerName || 'this customer'} (${loginText(o).replace(/^\S+ \w+ account · /, '')}). Send it to them on WeChat; they can sign in with it right away.` }),
+    el('div', { class: 'field' }, el('label', { for: 'rp-pw', text: 'New password (6+ characters)' }), pw));
+  const save = el('button', { class: 'btn primary', type: 'button', id: 'rp-save', onclick: async () => {
+    if (pw.value.length < 6) return toast('At least 6 characters.', true);
+    if (!sb || navigator.onLine === false) return toast('Needs internet.', true);
+    save.disabled = true;
+    const { error } = await sb.rpc('reset_account_password', { p_user: o.clientId, p_password: pw.value });
+    if (error) { save.disabled = false; return toast('Could not reset: ' + error.message, true); }
+    const p = pw.value;
+    body.replaceChildren(el('div', { class: 'sub', text: 'Password changed. Send it to the customer:' }), el('div', { class: 'rp-new', id: 'rp-new', text: p }));
+    save.replaceWith(el('button', { class: 'btn primary', type: 'button', onclick: () => copyText(p) }, 'Copy password'));
+  } }, 'Set password');
+  openModal(el('div', { class: 'sheet' }, el('h2', { text: '🔑 Reset password' }), body,
+    el('div', { class: 'actions' }, el('button', { class: 'btn', type: 'button', onclick: closeModal }, 'Close'), save)));
+}
+/* Link: connect a shop account to one of your customers */
 const isLinked = o => { const c = custOf(o); return !!(c && c.notes !== 'Signed up in the shop'); };
 function linkSheet(o) {
   const words = s => String(s || '').toLowerCase().replace(/[_\-.]+/g, ' ').split(/\s+/).filter(w => w.length > 1);
@@ -895,7 +931,7 @@ function linkSheet(o) {
   }
   draw();
   openModal(el('div', { class: 'sheet' }, el('h2', { text: '🔗 Link to a customer' }),
-    el('div', { class: 'sub', text: `This guest typed "${o.customerName || ''}". Pick who it is: their name and photo will show on this order, their earlier and future orders, and on their phone.` }),
+    el('div', { class: 'sub', text: `This customer typed "${o.customerName || ''}". Pick who it is: their name and photo will show on this order, their earlier and future orders, and on their phone.` }),
     input, list,
     el('div', { class: 'actions' }, el('button', { class: 'btn', type: 'button', onclick: closeModal }, 'Close'))));
   setTimeout(() => input.focus(), 50);
@@ -1499,8 +1535,12 @@ function chatSheet(clientId, orderNoHint) {
 
 /* ---------- CUSTOMERS ---------- */
 function viewCustomers(root) {
-  root.append(pageHead('Customers', 'Everyone who has ordered, with what they like.',
-    el('button', { class: 'btn primary', type: 'button', onclick: () => customerModal(null) }, '+ Add', el('span', { class: 'hide-m', text: ' customer' }))));
+  const accts = S.custTab === 'accounts';
+  root.append(pageHead('Customers', accts ? 'Phone and email logins made in the shop.' : 'Everyone who has ordered, with what they like.',
+    accts ? null : el('button', { class: 'btn primary', type: 'button', onclick: () => customerModal(null) }, '+ Add', el('span', { class: 'hide-m', text: ' customer' }))));
+  root.append(el('div', { class: 'inv-tabs', role: 'group' }, [['list', 'Customers'], ['accounts', 'Shop accounts']].map(([k, l]) =>
+    el('button', { type: 'button', id: 'ct-' + k, 'aria-pressed': (S.custTab || 'list') === k, onclick: () => { S.custTab = k; render(true); } }, l))));
+  if (accts) return accountsView(root);
   const stats = custStats();
   const regulars = S.customers.filter(c => (stats.get(c.id) || { n: 0 }).n >= 3).length;
   root.append(el('div', { class: 'tiles' }, tile('Customers', S.customers.length), tile('Regulars (3+)', regulars),
@@ -1510,6 +1550,68 @@ function viewCustomers(root) {
   const res = el('div');
   P.fn = () => { res.replaceChildren(); customerResults(res); renderNav(); };
   P.fn(); root.append(res);
+}
+/* Shop accounts: every phone / email login, with status, reset and delete (needs internet) */
+const acctIdent = login => String(login || '').endsWith('@' + PHONE_DOMAIN) ? { icon: '📱', id: login.replace('@' + PHONE_DOMAIN, '') } : { icon: '✉', id: login || '' };
+function accountsView(root) {
+  const res = el('div', { id: 'acct-list' });
+  root.append(el('div', { class: 'field', style: 'margin-bottom:12px' }, el('input', { id: 'acct-q', type: 'search', 'aria-label': 'Search accounts', placeholder: 'Search by number, email or name', value: S.acctQ || '',
+    oninput: e => { S.acctQ = e.target.value; draw(); } })), res);
+  function draw() {
+    if (!S.accts) return;
+    const q = (S.acctQ || '').trim().toLowerCase();
+    const list = S.accts.filter(a => !q || [acctIdent(a.login).id, a.name].some(x => (x || '').toLowerCase().includes(q)));
+    if (!list.length) { res.replaceChildren(el('div', { class: 'empty' }, el('b', { text: S.accts.length ? 'No one matches' : 'No shop accounts yet' }), S.accts.length ? 'Try another number or name.' : 'Accounts appear here when customers sign up in the shop.')); return; }
+    res.replaceChildren(el('div', { class: 'sub', style: 'margin-bottom:8px', text: `${S.accts.length} account${S.accts.length === 1 ? '' : 's'}` }),
+      el('div', { class: 'clist' }, ...list.slice(0, 300).map(a => {
+        const d = acctIdent(a.login);
+        return el('button', { class: 'crow acct-row', type: 'button', 'data-id': a.user_id, onclick: () => acctSheet(a) },
+          el('span', { class: 'acct-ic', text: d.icon }),
+          el('div', {}, el('div', { class: 'nm', text: a.name || d.id }), el('div', { class: 'meta' }, a.name ? d.id + ' ' : '', el('span', { class: 'vtag' + (a.verified ? ' ok' : ''), text: a.verified ? '✓ Verified' : 'Unverified' }))),
+          el('div', { class: 'meta', style: 'text-align:right' }, a.orders ? `${a.orders} order${a.orders == 1 ? '' : 's'}` : 'No orders', el('br'), 'joined ' + dateShort(Date.parse(a.created_at))));
+      })));
+  }
+  if (S.accts) draw(); else res.replaceChildren(el('div', { class: 'sub', text: 'Loading…' }));
+  if (!sb || navigator.onLine === false) { if (!S.accts) res.replaceChildren(el('div', { class: 'empty' }, el('b', { text: 'Needs internet' }), 'Shop accounts load from the server.')); return; }
+  loadAccts().then(draw, e => res.replaceChildren(el('div', { class: 'empty' }, el('b', { text: 'Could not load accounts' }),
+    /shop_accounts/.test((e && e.message) || '') ? 'Run update-2.9.sql in Supabase first.' : ((e && e.message) || String(e)))));
+}
+async function loadAccts() {
+  const { data, error } = await sb.rpc('shop_accounts');
+  if (error) throw error;
+  S.accts = data || [];
+}
+function acctSheet(a) {
+  const d = acctIdent(a.login);
+  const when = x => x ? dateShort(Date.parse(x)) + ' ' + timeStr(Date.parse(x)) : '—';
+  const refresh = () => { if (S.view === 'customers') render(true); };
+  const vbox = el('div', { class: 'acct-bits' });
+  const drawV = () => vbox.replaceChildren(el('span', { class: 'vtag' + (a.verified ? ' ok' : ''), id: 'as-vtag', text: a.verified ? '✓ Verified' : 'Unverified' }),
+    el('button', { class: 'link', type: 'button', id: 'as-verify', onclick: async () => {
+      const { error } = await sb.rpc('set_account_verified', { p_user: a.user_id, p_verified: !a.verified });
+      if (error) return toast('Could not change: ' + error.message, true);
+      a.verified = !a.verified; drawV(); refresh(); toast(a.verified ? 'Marked verified' : 'Marked unverified');
+    } }, a.verified ? 'Mark unverified' : 'Mark verified'));
+  drawV();
+  const row = (k, v) => el('div', { class: 'od-row' }, el('span', { class: 'sub', text: k }), el('b', { text: v }));
+  openModal(el('div', { class: 'sheet' },
+    el('h2', { text: d.icon + ' ' + d.id }),
+    a.name ? el('div', { class: 'sub', text: a.name }) : null, vbox,
+    el('section', { class: 'od-sect' }, row('Joined', when(a.created_at)), row('Last sign in', when(a.last_sign_in_at)),
+      row('Orders', String(a.orders || 0)), a.last_order ? row('Last order', when(a.last_order)) : null),
+    el('div', { class: 'btns' },
+      el('button', { class: 'btn small', type: 'button', id: 'as-reset', onclick: () => resetPwSheet({ clientId: a.user_id, customerName: a.name, clientLogin: a.login }) }, '🔑 Reset password'),
+      a.customer_id && M.customers && M.customers.get(a.customer_id) ? el('button', { class: 'btn small', type: 'button', onclick: () => customerModal(M.customers.get(a.customer_id)) }, 'Customer record') : null),
+    el('div', { class: 'sub', style: 'margin-top:14px', text: 'Deleting removes this login, its chat and its reviews. Their orders and customer record stay. They are signed out within an hour.' }),
+    el('div', { class: 'actions' },
+      confirmBtn('Delete account', 'Tap again to delete', async () => {
+        if (!sb || navigator.onLine === false) return toast('Needs internet.', true);
+        const { error } = await sb.rpc('delete_shop_account', { p_user: a.user_id });
+        if (error) return toast('Could not delete: ' + error.message, true);
+        S.accts = (S.accts || []).filter(x => x.user_id !== a.user_id);
+        closeModal(); toast('Account deleted'); Sync.soon(0); refresh();
+      }, 'danger left'),
+      el('button', { class: 'btn', type: 'button', onclick: closeModal }, 'Close'))));
 }
 function customerResults(root) {
   const stats = custStats();

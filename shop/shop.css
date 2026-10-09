@@ -263,3 +263,23 @@ input[readonly]{background:var(--surface2)!important;color:var(--muted)}
 .acct-txt{display:flex;flex-direction:column;min-width:0}
 .acct-txt b{font-family:var(--font-body);font-size:17px;font-weight:700;overflow-wrap:anywhere}
 .acct-txt small{color:var(--muted);font-size:13px}
+/* sign in (2.0): one field, then password slides in */
+.sheet.auth{display:flex;flex-direction:column;gap:12px}
+.sheet.auth h2{margin:0 0 4px}
+.auth-title{transition:opacity .16s ease,transform .16s ease}
+.auth-title.fade{opacity:0;transform:translateY(-4px)}
+.auth-id{position:relative}
+.sheet.auth input{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:13px 12px;font-size:16px;min-width:0}
+.sheet.auth input:focus{outline:none;border-color:var(--ink)}
+.auth-id input{width:100%;transition:padding .3s ease,font-size .3s ease,background-color .3s ease,border-color .3s ease}
+.auth-change{position:absolute;right:12px;top:50%;transform:translateY(-50%);opacity:0;pointer-events:none;transition:opacity .25s ease}
+.sheet.auth.submitted .auth-id input{padding-top:7px;padding-bottom:7px;padding-right:70px;font-size:14px;font-weight:600;background:var(--surface);border-color:transparent;color:var(--muted)}
+.sheet.auth.submitted .auth-change{opacity:1;pointer-events:auto}
+.auth-more{display:grid;grid-template-rows:0fr;opacity:0;transform:translateY(8px);transition:grid-template-rows .3s ease,opacity .3s ease,transform .3s ease}
+.auth-more.open{grid-template-rows:1fr;opacity:1;transform:none}
+.auth-more-in{overflow:hidden;display:flex;flex-direction:column;gap:10px;min-height:0}
+.auth-more-in input{width:100%}
+.auth-more-in [hidden]{display:none}
+.auth-forgot{margin:0}
+.sheet.auth .err:empty{display:none}
+#me-login{display:flex;align-items:center;gap:8px;flex-wrap:wrap}

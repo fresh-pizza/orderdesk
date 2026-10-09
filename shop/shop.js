@@ -11,7 +11,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   phoneDomain: 'phone.orderdesk.app', // phone logins are stored as <digits>@this, no SMS involved
 };
-const SHOP_VERSION = '1.9.1';
+const SHOP_VERSION = '2.0.0';
 /* phones (WeChat especially) keep old copies of web pages; if a newer shop is online, reload it */
 (async function freshness() {
   try {
@@ -200,8 +200,7 @@ const niceErr = e => {
   const m = (e && (e.message || e.error_description)) || String(e);
   if (/fetch|network|load failed/i.test(m)) return 'No connection. Check your internet and try again.';
   if (/signups not allowed|signup.*disabled/i.test(m)) return 'The shop is not taking new accounts yet.';
-  if (/anonymous sign-ins are disabled/i.test(m)) return 'Guest ordering is switched off. Please use a phone number or email.';
-  if (/invalid login/i.test(m)) return 'Wrong phone/email or password.';
+    if (/invalid login/i.test(m)) return 'Wrong phone/email or password.';
   if (/already registered|already been registered/i.test(m)) return 'That account already exists. Sign in instead.';
   if (/password.*(at least|short)/i.test(m)) return 'Choose a longer password (at least 6 characters).';
   return m;
@@ -238,7 +237,7 @@ function whoAmI() {
 }
 /* signing out forgets everything about that person on this phone, so the next customer starts clean */
 function forgetPerson() {
-  S.session = null; S.orders = []; S.msgs = []; S.profile = null; S.lastOrder = null; lastStatus.clear();
+  S.session = null; S.orders = []; S.msgs = []; S.profile = null; S.acct = undefined; S.lastOrder = null; lastStatus.clear();
   Object.assign(S.draft, { name: '', phone: '', address: '', note: '' }); store.set('draft', S.draft);
 }
 async function signOutShop() { await sb.auth.signOut({ scope: 'local' }); forgetPerson(); render(); toast('Signed out'); }
@@ -247,7 +246,7 @@ function viewMe(root) {
   root.append(el('h1', { class: 'page-h', text: 'Me' }));
   if (!me) {
     root.append(el('div', { class: 'box' }, el('b', { text: 'Not signed in' }),
-      el('p', { class: 'fineprint', text: 'Sign in to see your orders and message us. You can also just order: we ask how you want to sign in at checkout.' }),
+      el('p', { class: 'fineprint', text: 'Sign in to see your orders and message us. You can also just order: we ask for your phone number or email at checkout.' }),
       el('button', { class: 'btn primary big-btn', type: 'button', id: 'me-signin', onclick: () => authSheet(() => render()) }, 'Sign in')));
     return;
   }
@@ -256,10 +255,11 @@ function viewMe(root) {
     el('div', { class: 'box' }, el('div', { class: 'acct-card' + (S.profile && S.profile.photo ? ' has-pic' : '') },
         S.profile && S.profile.photo ? el('img', { class: 'me-pic', src: publicUrl(S.profile.photo), alt: '' }) : null,
         el('div', { class: 'acct-txt' }, el('b', { id: 'me-id', text: me.kind === 'Guest' ? me.id : ((S.profile && S.profile.name) || me.id) }),
-          me.kind !== 'Guest' ? el('small', { text: me.id }) : null)),
-      me.kind === 'Guest' ? el('p', { class: 'fineprint', text: 'Guest orders are saved on this phone only. Create a phone or email account to see your orders on any phone.' }) : null,
+          me.kind !== 'Guest' ? el('small', { id: 'me-login' }, S.profile && S.profile.name ? (me.kind === 'Phone' ? '📱 ' : '✉ ') + me.id : '',
+            S.acct !== undefined ? el('span', { class: 'vtag' + (S.acct && S.acct.verified ? ' ok' : ''), id: 'me-verified', text: S.acct && S.acct.verified ? '✓ Verified' : 'Unverified' }) : null) : null)),
+      me.kind === 'Guest' ? el('p', { class: 'fineprint', text: 'Guest orders are saved on this phone only. Save your account with your phone number or email to keep your orders and messages on any phone.' }) : null,
       el('div', { class: 'btnrow' },
-        me.kind === 'Guest' ? el('button', { class: 'btn', type: 'button', onclick: () => authSheet(() => render()) }, 'Use phone or email') : null,
+        me.kind === 'Guest' ? el('button', { class: 'btn primary', type: 'button', id: 'me-save', onclick: () => authSheet(() => render(), true) }, 'Save my account') : null,
         el('button', { class: 'btn danger', type: 'button', id: 'acct-out', onclick: signOutShop }, 'Sign out'))),
     S.msgsOff ? null : el('button', { class: 'me-row', type: 'button', id: 'me-chat', onclick: () => openChat(null) },
       el('span', { class: 'me-ic', text: '💬' }), el('span', { class: 'me-mid' }, el('b', { text: 'Messages' }), el('small', { text: un ? `${un} new from ${S.biz.name || 'us'}` : `Chat with ${S.biz.name || 'us'}` })),
@@ -588,52 +588,102 @@ async function placeOrder(err) {
   } catch (e) { err.textContent = niceErr(e); btn.disabled = false; btn.textContent = 'Place order'; }
 }
 
-/* ---------- sign in: guest, phone or email ---------- */
-function authSheet(after) {
-  let mode = store.get('authMode', 'guest'), create = false;
+/* ---------- sign in: one field (mobile number or email) → password, or create a password ----------
+   save: a guest turns their guest login into a phone/email account, keeping the same account. */
+function authSheet(after, save) {
+  let step = 'id';
+  const title0 = save ? 'Save my account' : 'Sign in';
+  const isEmail = v => v.includes('@');
+  const digitsOf = v => { let d = v.replace(/\D/g, ''); if (d.length === 13 && d.startsWith('86')) d = d.slice(2); return d; };
+  const login = v => isEmail(v) ? v.trim().toLowerCase() : `${digitsOf(v)}@${CFG.phoneDomain}`;
+  const title = el('h2', { class: 'auth-title', id: 'a-title', text: title0 });
+  const id = el('input', { id: 'a-id', type: 'text', autocomplete: 'username', autocapitalize: 'off', spellcheck: false, 'aria-label': 'Mobile number or email',
+    placeholder: 'Mobile number or email', value: S.draft.phone || '' });
+  const change = el('button', { class: 'link auth-change', type: 'button', id: 'a-change', tabindex: -1, onclick: () => setStep('id') }, 'Change');
+  const pw = el('input', { id: 'a-pw', type: 'password', autocomplete: 'current-password', placeholder: 'Password', 'aria-label': 'Password' });
+  const pw2 = el('input', { id: 'a-pw2', type: 'password', autocomplete: 'new-password', placeholder: 'Confirm password', 'aria-label': 'Confirm password' });
+  const nm = el('input', { id: 'a-name', type: 'text', autocomplete: 'name', placeholder: 'Your name (preferably your WeChat name)', 'aria-label': 'Your name' });
+  const forgot = el('p', { class: 'fineprint auth-forgot', text: 'Forgot your password? Message us and we will reset it.' });
+  const more = el('div', { class: 'auth-more', inert: '' }, el('div', { class: 'auth-more-in' }, nm, pw, pw2, forgot));
   const err = el('div', { class: 'err', role: 'alert' });
-  const body = el('div', { style: 'display:flex;flex-direction:column;gap:10px' });
-  const sheet = el('div', { class: 'sheet' }, el('h2', { text: 'How do you want to order?' }),
-    el('div', { class: 'tabs3', role: 'group' }), body, err);
-  const tabs = sheet.querySelector('.tabs3');
-  function draw() {
-    tabs.replaceChildren(...[['guest', 'Guest'], ['phone', 'Phone'], ['email', 'Email']].map(([k, l]) =>
-      el('button', { type: 'button', 'aria-pressed': mode === k, onclick: () => { mode = k; err.textContent = ''; draw(); } }, l)));
-    const id = el('input', mode === 'email' ? { id: 'a-id', type: 'email', autocomplete: 'username', inputmode: 'email', placeholder: 'you@example.com' }
-      : { id: 'a-id', type: 'tel', autocomplete: 'tel', inputmode: 'tel', value: S.draft.phone || '', placeholder: '138…' });
-    const pw = el('input', { id: 'a-pw', type: 'password', autocomplete: create ? 'new-password' : 'current-password' });
-    if (mode === 'guest') {
-      body.replaceChildren(el('p', { class: 'sub', text: 'No account needed. Your orders are saved on this phone only, so use the same phone to check on them.' }),
-        el('button', { class: 'btn primary big-btn', type: 'button', id: 'a-guest', onclick: () => run(() => sb.auth.signInAnonymously()) }, 'Continue as guest'));
-    } else {
-      body.replaceChildren(
-        el('p', { class: 'sub', text: create ? 'Create an account so your orders follow you to any phone.' : 'Sign in to see your orders on any phone.' }),
-        el('div', { class: 'field' }, el('label', { for: 'a-id', text: mode === 'email' ? 'Email' : 'Phone number' }), id),
-        el('div', { class: 'field' }, el('label', { for: 'a-pw', text: create ? 'Choose a password (6+ characters)' : 'Password' }), pw),
-        el('button', { class: 'btn primary big-btn', type: 'button', id: 'a-go', onclick: () => {
-          const ident = mode === 'email' ? id.value.trim() : `${id.value.replace(/\D/g, '')}@${CFG.phoneDomain}`;
-          if (mode === 'phone' && id.value.replace(/\D/g, '').length < 5) { err.textContent = 'Enter your phone number.'; return; }
-          if (!pw.value) { err.textContent = 'Enter a password.'; return; }
-          run(() => create ? sb.auth.signUp({ email: ident, password: pw.value }) : sb.auth.signInWithPassword({ email: ident, password: pw.value }));
-        } }, create ? 'Create account' : 'Sign in'),
-        el('button', { class: 'link', type: 'button', onclick: () => { create = !create; err.textContent = ''; draw(); } }, create ? 'I already have an account' : 'New here? Create an account'));
+  const btn = el('button', { class: 'btn primary big-btn', type: 'button', id: 'a-next', onclick: () => (step === 'id' ? next() : go()) }, 'Continue');
+  const sheet = el('div', { class: 'sheet auth' }, title, el('div', { class: 'auth-id' }, id, change), more, err, btn);
+  const enter = e => { if (e.key === 'Enter') btn.click(); };
+  for (const x of [id, pw, pw2, nm]) x.onkeydown = enter;
+
+  function setTitle(t) {
+    if (title.textContent === t) return;
+    title.classList.add('fade'); setTimeout(() => { title.textContent = t; title.classList.remove('fade'); }, 160);
+  }
+  function setStep(st) {
+    step = st; err.textContent = '';
+    const done = st !== 'id';
+    sheet.classList.toggle('submitted', done);
+    id.readOnly = done; change.tabIndex = done ? 0 : -1;
+    nm.hidden = !(st === 'create' && !S.draft.name);
+    pw2.hidden = st !== 'create';
+    forgot.hidden = st !== 'login';
+    pw.autocomplete = st === 'create' ? 'new-password' : 'current-password';
+    pw.placeholder = st === 'create' ? 'Password (6+ characters)' : 'Password';
+    pw.value = ''; pw2.value = '';
+    more.classList.toggle('open', done);
+    if (done) more.removeAttribute('inert'); else more.setAttribute('inert', '');
+    setTitle(st === 'create' && !save ? 'New here? Create a password' : st === 'login' && save ? 'This already has an account' : title0);
+    btn.id = done ? 'a-go' : 'a-next';
+    btn.textContent = st === 'id' ? 'Continue' : st === 'login' ? 'Sign in' : save ? 'Save my account' : 'Create account';
+    btn.disabled = false;
+    setTimeout(() => (done ? (nm.hidden ? pw : nm) : id).focus(), done ? 320 : 50);
+  }
+  async function next() {
+    err.textContent = '';
+    const v = id.value.trim();
+    if (!v) { err.textContent = 'Enter your mobile number or email.'; return; }
+    if (isEmail(v) ? !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v) : digitsOf(v).length < 5) { err.textContent = isEmail(v) ? 'That email does not look right.' : 'That mobile number does not look right.'; return; }
+    btn.disabled = true; btn.textContent = 'Checking…';
+    try {
+      if (!sb) throw new Error('No connection. Check your internet and try again.');
+      const { data, error } = await sb.rpc('account_exists', { p_login: login(v) });
+      if (error) throw error;
+      if (!isEmail(v)) { id.value = digitsOf(v); if (!S.draft.phone) { S.draft.phone = id.value; store.set('draft', S.draft); } }
+      setStep(data ? 'login' : 'create');
+    } catch (e) { err.textContent = niceErr(e); btn.disabled = false; btn.textContent = 'Continue'; }
+  }
+  function go() {
+    err.textContent = '';
+    if (!pw.value) { err.textContent = 'Enter your password.'; return; }
+    if (step === 'create') {
+      if (pw.value.length < 6) { err.textContent = 'Choose a password with at least 6 characters.'; return; }
+      if (pw.value !== pw2.value) { err.textContent = 'The two passwords do not match.'; return; }
+      if (!nm.hidden && nm.value.trim()) { S.draft.name = nm.value.trim(); store.set('draft', S.draft); }
     }
+    const em = login(id.value);
+    run(async () => {
+      if (step === 'login') return sb.auth.signInWithPassword({ email: em, password: pw.value });
+      if (save) {
+        const { error } = await sb.rpc('claim_account', { p_login: em, p_password: pw.value });
+        if (error) return { error };
+        return sb.auth.signInWithPassword({ email: em, password: pw.value });
+      }
+      return sb.auth.signUp({ email: em, password: pw.value });
+    });
   }
   async function run(fn) {
-    err.textContent = '';
-    const btn = body.querySelector('.btn.primary'); if (btn) btn.disabled = true;
+    btn.disabled = true;
     try {
       if (!sb) throw new Error('No connection. Check your internet and try again.');
       const { data, error } = await fn();
       if (error) throw error;
       if (!data.session) throw new Error('Check your email to confirm your account, then sign in.');
-      store.set('authMode', mode);
       await onSession(data.session);
       closeModal();
+      if (save) toast('Account saved');
       if (after) after();
-    } catch (e) { err.textContent = niceErr(e); if (btn) btn.disabled = false; }
+    } catch (e) {
+      err.textContent = /invalid login/i.test((e && e.message) || '') ? 'Wrong password. Forgot it? Message us and we will reset it.' : niceErr(e);
+      btn.disabled = false;
+    }
   }
-  draw(); openModal(sheet);
+  openModal(sheet); setStep('id');
 }
 async function refreshProfile() {
   try {
@@ -660,7 +710,20 @@ async function onSession(session) {
       store.set('draft', S.draft);
     }
   } catch (_) { /* fine */ }
+  loadAcct();
   listen(); loadOrders(); loadMsgs();
+}
+/* Verified / Unverified (undefined = unknown, e.g. offline) */
+async function loadAcct() {
+  S.acct = undefined;
+  const u = S.session && S.session.user;
+  if (!u || u.is_anonymous) return;
+  try {
+    const { data, error } = await sb.from('accounts').select('verified').eq('user_id', u.id).limit(1);
+    if (error) return;
+    S.acct = (data && data[0]) || { verified: false };
+    if (S.view === 'me') render();
+  } catch (_) { /* fine */ }
 }
 
 /* ---------- payment ---------- */
