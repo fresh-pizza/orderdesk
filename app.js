@@ -9,7 +9,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   bucket: 'photos',
 };
-const VERSION = '2.2.1';
+const VERSION = '2.3.0';
 const COLLS = ['menu', 'customers', 'orders', 'settings', 'purchases'];
 const DEFAULT_SETTINGS = { id: 'main', name: 'My kitchen', currency: '¥', deliveryFee: 0, addresses: [], wechatQr: '', alipayQr: '', wechatId: '', alipayId: '' };
 
@@ -54,6 +54,7 @@ function newId() {
 }
 const toIso = ms => new Date(Number(ms) || Date.now()).toISOString();
 const toMs = s => { const t = Date.parse(s); return Number.isFinite(t) ? t : Date.now(); };
+const tsMs = s => (s ? toMs(s) : 0);
 
 /* ---------- local database (IndexedDB) ---------- */
 const IDB = (() => {
@@ -100,7 +101,7 @@ const IDB = (() => {
 })();
 
 /* ---------- app state ---------- */
-const ST = { new: 'Received', cooking: 'Received', accepted: 'Accepted', ready: 'Ready', done: 'Done', cancelled: 'Cancelled' };
+const ST = { new: 'Received', cooking: 'Received', accepted: 'Accepted', ready: 'On the way / Ready', done: 'Delivered', cancelled: 'Cancelled' };
 const PAY = { wechat: 'WeChat Pay', alipay: 'Alipay', wechat_chat: 'WeChat chat', alipay_chat: 'Alipay chat' };
 const payBase = m => String(m || '').replace('_chat', '');
 /* the WeChat Pay / Alipay logo; a coloured dot if the picture can't load */
@@ -117,7 +118,7 @@ const S = {
   menu: [], customers: [], orders: [], purchases: [], settings: clone(DEFAULT_SETTINGS),
   loaded: { menu: true, customers: true, orders: true, config: true },
   view: 'orders', statMode: 'days', statPick: null, ordFilter: 'all', ordLimit: 60, menuQ: '', menuCat: 'All', custQ: '', pickQ: '', pickCat: 'All',
-  draft: null, blobUrls: new Map(), outbox: new Map(),
+  draft: null, blobUrls: new Map(), outbox: new Map(), svc: 'all', msgs: [], msgsOff: false,
 };
 function refreshArrays(colls) {
   for (const c of colls || COLLS) {
@@ -169,7 +170,7 @@ function photoDelOp(path) {
   S.outbox.set(key, entry);
   return [{ store: 'outbox', key, val: entry }];
 }
-const bucketFor = path => (/\/receipt-/.test(path) ? 'receipts' : CFG.bucket);
+const bucketFor = path => (/\/(receipt|delivered)-/.test(path) ? 'receipts' : CFG.bucket); // private: payment screenshots, delivery photos
 async function receiptSrc(path) { // private: fetched with your login, kept in memory
   if (!path) return '';
   if (S.blobUrls.has(path)) return S.blobUrls.get(path);
@@ -187,23 +188,26 @@ const num = v => Number(v) || 0;
 const MAP = {
   menu: {
     to: r => Object.assign({ id: r.id, name: r.name || '', category: r.category || 'Other', description: r.description || '', variants: r.variants || [], photo: r.photo || '', available: r.available !== false, example: !!r.example, deleted: !!r.deleted },
-      r.winTouched ? { windows: r.windows || [] } : {}),
+      r.winTouched ? { windows: r.windows || [] } : {},
+      r.svcTouched ? { service: r.service === 'night' ? 'night' : 'day' } : {}),
     from: x => ({ id: x.id, name: x.name, category: x.category, description: x.description, variants: x.variants || [], photo: x.photo || '', available: x.available !== false, example: !!x.example, deleted: !!x.deleted,
-      windows: Array.isArray(x.windows) ? x.windows : [], winTouched: x.windows !== undefined }),
+      windows: Array.isArray(x.windows) ? x.windows : [], winTouched: x.windows !== undefined, service: x.service === 'night' ? 'night' : 'day', svcTouched: x.service !== undefined }),
   },
   customers: {
     // photo is only sent when there is one, so this works even before the photo column exists
     to: r => Object.assign({ id: r.id, name: r.name || '', phone: r.phone || '', address: r.address || '', notes: r.notes || '', created_at: toIso(r.createdAt), deleted: !!r.deleted }, r.photo ? { photo: r.photo } : {}),
-    from: x => ({ id: x.id, name: x.name, phone: x.phone, address: x.address, notes: x.notes, photo: x.photo || '', createdAt: toMs(x.created_at), deleted: !!x.deleted }),
+    from: x => ({ id: x.id, name: x.name, phone: x.phone, address: x.address, notes: x.notes, photo: x.photo || '', userId: x.user_id || '', createdAt: toMs(x.created_at), deleted: !!x.deleted }),
   },
   orders: {
     to: r => Object.assign({ id: r.id, no: r.no || 0, customer_id: r.customerId || null, customer_name: r.customerName || '', phone: r.phone || '', address: r.address || '', type: r.type || 'delivery', items: r.items || [], subtotal: num(r.subtotal), fee: num(r.fee), total: num(r.total), note: r.note || '', status: r.status || 'new', created_at: toIso(r.createdAt), deleted: !!r.deleted },
       r.payTouched ? { paid: !!r.paid, pay_method: r.payMethod || '', pay_proof: r.payProof || '', paid_at: r.paidAt ? toIso(r.paidAt) : null } : {},
-      r.slotTouched ? { slot_date: r.slotDate || '', slot: r.slot || '' } : {}),
+      r.slotTouched ? { slot_date: r.slotDate || '', slot: r.slot || '' } : {},
+      r.delTouched ? { delivery_proof: r.deliveryProof || '' } : {}),
     from: x => ({ id: x.id, no: x.no, customerId: x.customer_id || null, customerName: x.customer_name, phone: x.phone, address: x.address, type: x.type, items: x.items || [], subtotal: num(x.subtotal), fee: num(x.fee), total: num(x.total), note: x.note, status: x.status, createdAt: toMs(x.created_at), deleted: !!x.deleted,
       paid: !!x.paid, payMethod: x.pay_method || '', payProof: x.pay_proof || '', paidAt: x.paid_at ? toMs(x.paid_at) : 0, payTouched: x.paid !== undefined,
       slotDate: x.slot_date || '', slot: x.slot || '', slotTouched: x.slot !== undefined,
-      source: x.source || 'admin', paySubmittedAt: x.pay_submitted_at ? toMs(x.pay_submitted_at) : 0 }),
+      source: x.source || 'admin', paySubmittedAt: tsMs(x.pay_submitted_at), clientId: x.client_id || '',
+      acceptedAt: tsMs(x.accepted_at), readyAt: tsMs(x.ready_at), doneAt: tsMs(x.done_at), deliveryProof: x.delivery_proof || '', delTouched: x.delivery_proof !== undefined }),
   },
   purchases: {
     to: r => ({ id: r.id, day: r.day || isoDay(Date.now()), item: r.item || '', qty: num(r.qty), unit: r.unit || '', cost: num(r.cost), note: r.note || '', photos: r.photos || [], created_at: toIso(r.createdAt), deleted: !!r.deleted }),
@@ -238,6 +242,7 @@ const Sync = {
       await pull();
       if (photoErr) throw photoErr;
       this.lastOk = Date.now(); this.fails = 0; this.set('ok');
+      loadMsgsSoon(0);
       if (!channel) startRealtime();
     } catch (e) {
       this.fails++;
@@ -340,6 +345,7 @@ function startRealtime() {
   try {
     channel = sb.channel('od-' + S.uid);
     for (const t of COLLS) channel.on('postgres_changes', { event: '*', schema: 'public', table: t }, () => Sync.soon(250)); // whole team's changes
+    channel.on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, () => loadMsgsSoon(150));
     channel.subscribe();
   } catch (_) { channel = null; }
 }
@@ -374,10 +380,10 @@ function toast(msg, isErr) {
 }
 function openModal(node) {
   const m = $('#modal');
-  m.replaceChildren(node); m.hidden = false;
+  m.replaceChildren(node); m.hidden = false; chatOpen = null;
   const f = node.querySelector('input:not([type=file]),select,textarea,button'); if (f && window.matchMedia('(min-width:821px)').matches) f.focus();
 }
-function closeModal() { const m = $('#modal'); m.hidden = true; m.replaceChildren(); }
+function closeModal() { const m = $('#modal'); m.hidden = true; m.replaceChildren(); chatOpen = null; }
 $('#modal').addEventListener('mousedown', e => { if (e.target.id === 'modal') closeModal(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#modal').hidden) closeModal(); });
 
@@ -432,8 +438,9 @@ const ICONS = {
   customers: '<circle cx="12" cy="8" r="4"/><path d="M4 21c1-4 4-6 8-6s7 2 8 6"/>',
   inventory: '<path d="M3 7l9-4 9 4v10l-9 4-9-4z"/><path d="M3 7l9 4 9-4M12 11v10"/>',
   stats: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
+  messages: '<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/>',
 };
-const NAV = [['new', 'New order'], ['orders', 'Orders'], ['menu', 'Menu'], ['customers', 'Customers'], ['inventory', 'Inventory'], ['stats', 'Statistics']];
+const NAV = [['new', 'New order'], ['orders', 'Orders'], ['messages', 'Messages'], ['menu', 'Menu'], ['customers', 'Customers'], ['inventory', 'Inventory'], ['stats', 'Statistics']];
 function renderNav() {
   const open = S.orders.filter(isUnpaid).length;
   $('#brand').replaceChildren(S.settings.name || 'My kitchen', el('small', { text: 'Order desk' }));
@@ -441,10 +448,12 @@ function renderNav() {
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     svg.setAttribute('viewBox', '0 0 24 24'); svg.innerHTML = ICONS[k];
     return el('button', { type: 'button', 'aria-current': S.view === k ? 'page' : false, 'aria-label': label, title: label, onclick: () => go(k) },
-      svg, el('span', { class: 'nav-lbl', text: label }), k === 'orders' && open ? el('span', { class: 'badge', text: open }) : null);
+      svg, el('span', { class: 'nav-lbl', text: label }), k === 'orders' && open ? el('span', { class: 'badge', text: open }) : null,
+      k === 'messages' && unreadAll() ? el('span', { class: 'badge', text: unreadAll() }) : null);
   }));
   $('#side-sync').replaceChildren(syncChip());
-  document.title = (open ? `(${open}) ` : '') + 'Order Desk';
+  const un = unreadAll();
+  document.title = (open + un ? `(${open + un}) ` : '') + 'Order Desk';
 }
 function go(v) { S.view = v; S.ordLimit = 60; render(true); window.scrollTo(0, 0); }
 $('#gear-desk').addEventListener('click', () => settingsModal());
@@ -471,7 +480,7 @@ function render(viewChanged) {
   P.fn = null;
   main.replaceChildren();
   banners(main);
-  ({ orders: viewOrders, menu: viewMenu, customers: viewCustomers, inventory: viewInventory, stats: viewStats })[S.view](main);
+  ({ orders: viewOrders, messages: viewMessages, menu: viewMenu, customers: viewCustomers, inventory: viewInventory, stats: viewStats })[S.view](main);
 }
 const P = { fn: null };
 function banners(root) {
@@ -508,7 +517,15 @@ function viewOrders(root) {
   if (!filters.some(([k]) => k === S.ordFilter)) S.ordFilter = 'all';
   root.append(el('div', { class: 'chips' }, filters.map(([k, label]) =>
     el('button', { class: 'chip', type: 'button', 'aria-pressed': S.ordFilter === k, onclick: () => { S.ordFilter = k; S.ordLimit = 60; render(true); } }, label))));
-  const keep = { all: () => true, paid: o => !isCancelled(o) && o.paid, unpaid: isUnpaid, cancelled: isCancelled }[S.ordFilter];
+  if (hasNight()) {
+    const active = o => !isCancelled(o) && o.status !== 'done';
+    const cnt = k => S.orders.filter(o => active(o) && (k === 'all' || orderSvc(o) === k)).length;
+    root.append(el('div', { class: 'svc-tiles', role: 'group', 'aria-label': 'Day or night orders' }, [['all', 'All'], ['day', SVC.day], ['night', SVC.night]].map(([k, l]) =>
+      el('button', { type: 'button', class: 'svc-tile ' + k, id: 'svc-' + k, 'aria-pressed': S.svc === k, onclick: () => { S.svc = k; S.ordLimit = 60; render(true); } },
+        el('b', { text: cnt(k) }), el('span', { text: l }), el('small', { text: 'open' })))));
+  } else S.svc = 'all';
+  const keep0 = { all: () => true, paid: o => !isCancelled(o) && o.paid, unpaid: isUnpaid, cancelled: isCancelled }[S.ordFilter];
+  const keep = o => keep0(o) && (S.svc === 'all' || orderSvc(o) === S.svc);
   const list = S.orders.filter(keep).sort((a, b) => b.createdAt - a.createdAt);
   if (!list.length) {
     root.append(el('div', { class: 'empty' }, el('b', { text: S.orders.length ? 'Nothing here' : 'No orders yet' }),
@@ -546,17 +563,20 @@ function slotText(o) {
 const custOf = o => (o.customerId && M.customers.get(o.customerId)) || null;
 function whoAvatar(o, cls) { const c = custOf(o); return avatar({ name: o.customerName || 'Walk-in', photo: c && !c.deleted ? c.photo : '' }, cls); }
 /* progress the client sees: Received -> Accepted -> Ready / On the way -> Done */
-function nextStep(o) {
-  if (isCancelled(o)) return null;
-  const s = o.status;
-  if (s === 'accepted') return ['ready', o.type === 'delivery' ? 'On the way' : 'Ready'];
-  if (s === 'ready') return ['done', 'Done'];
-  if (s === 'done') return null;
-  return ['accepted', 'Accept'];
-}
+/* order flow: Received -> Accept -> Mark paid -> On the way / Ready -> Delivered / Picked up */
+const doneLabel = o => (o.type === 'delivery' ? 'Delivered' : 'Picked up');
+const readyLabel = o => (o.type === 'delivery' ? 'On the way' : 'Ready');
+const isNew = o => !['accepted', 'ready', 'done', 'cancelled'].includes(o.status);
 function stepText(o) {
-  return { accepted: 'Accepted · cooking', ready: o.type === 'delivery' ? 'On the way' : 'Ready for pickup', done: 'Done' }[o.status] || '';
+  return { accepted: o.paid ? 'Accepted · cooking' : 'Accepted · waiting for payment', ready: o.type === 'delivery' ? 'On the way' : 'Ready for pickup', done: doneLabel(o) }[o.status] || '';
 }
+/* Day / Night: from the dishes in the order */
+function orderSvc(o) {
+  for (const it of o.items || []) { const m = M.menu.get(it.menuId); if (m) return m.service === 'night' ? 'night' : 'day'; }
+  return 'day';
+}
+const SVC = { day: '☀ Day', night: '🌙 Night' };
+const hasNight = () => S.menu.some(m => m.service === 'night');
 function payPill(o) {
   if (isCancelled(o)) return el('span', { class: 'pill cancelled', text: 'Cancelled' });
   if (!o.paid && o.paySubmittedAt) return el('span', { class: 'pill check' }, payLogo(o.payMethod), o.payProof ? 'Check payment' : 'Check chat');
@@ -570,78 +590,152 @@ function itemLines(o) {
   if (o.type === 'delivery') items.push(el('li', {}, el('span', { text: 'Delivery' }), el('span', { text: feeText(o.fee) })));
   return items;
 }
-function ticket(o) {
-  const sameDay = startOfDay(o.createdAt) === startOfDay(Date.now());
+/* the buttons for where the order is now (tickets and order details share them) */
+function orderActions(o, after) {
+  const done = () => { if (after) after(); };
+  const stop = fn => e => { if (e) e.stopPropagation(); fn(); };
   const acts = [];
   if (isCancelled(o)) {
-    acts.push(el('button', { class: 'btn small', type: 'button', onclick: e => { e.stopPropagation(); setStatus(o, 'new'); } }, 'Reopen'));
-    acts.push(confirmBtn('Delete', 'Delete for good?', () => write(Store.remove('orders', o.id), 'Order deleted'), 'danger'));
-  } else if (!o.paid) {
-    acts.push(el('button', { class: 'btn small pay', type: 'button', onclick: e => { e.stopPropagation(); payModal(o); } }, o.paySubmittedAt ? 'Check & confirm' : 'Mark paid'));
-    acts.push(confirmBtn('Cancel', 'Sure?', () => setStatus(o, 'cancelled'), 'danger'));
-  } else {
-    const nx = nextStep(o);
-    if (nx) acts.push(el('button', { class: 'btn small primary', type: 'button', onclick: e => { e.stopPropagation(); setStatus(o, nx[0]); } }, nx[1]));
-    else acts.push(el('span', { class: 'paid-note' }, '✓ ', payLogo(o.payMethod), (PAY[o.payMethod] || 'Paid') + (o.payProof ? ' · screenshot' : '')));
+    acts.push(el('button', { class: 'btn small', type: 'button', onclick: stop(async () => { await setStatus(o, 'new'); done(); }) }, 'Reopen'));
+    acts.push(confirmBtn('Delete', 'Delete for good?', async () => { if (await write(Store.remove('orders', o.id, [...photoDelOp(o.payProof), ...photoDelOp(o.deliveryProof)]), 'Order deleted')) closeModal(); }, 'danger'));
+    return acts;
   }
+  const cancel = confirmBtn('Cancel', 'Sure?', async () => { await setStatus(o, 'cancelled'); done(); }, 'danger');
+  if (isNew(o)) {
+    acts.push(el('button', { class: 'btn small primary', type: 'button', id: 'act-accept', onclick: stop(async () => { await setStatus(o, 'accepted'); done(); }) }, 'Accept'), cancel);
+  } else if (!o.paid && o.status === 'accepted') {
+    acts.push(el('button', { class: 'btn small pay', type: 'button', onclick: stop(() => payModal(o)) }, o.paySubmittedAt ? 'Check & mark paid' : 'Mark paid'), cancel);
+  } else if (o.status === 'accepted') {
+    acts.push(el('button', { class: 'btn small primary', type: 'button', onclick: stop(async () => { await setStatus(o, 'ready'); done(); }) }, readyLabel(o)));
+  } else if (o.status === 'ready') {
+    if (!o.paid) acts.push(el('button', { class: 'btn small pay', type: 'button', onclick: stop(() => payModal(o)) }, 'Mark paid'));
+    acts.push(el('button', { class: 'btn small done', type: 'button', id: 'act-delivered', onclick: stop(() => deliveredModal(o)) }, doneLabel(o)));
+  } else if (o.status === 'done') {
+    acts.push(el('span', { class: 'paid-note' }, '✓ ' + doneLabel(o), o.deliveryProof ? ' · photo' : ''));
+    if (!o.paid) acts.push(el('button', { class: 'btn small pay', type: 'button', onclick: stop(() => payModal(o)) }, 'Mark paid'));
+  }
+  return acts;
+}
+function unreadFrom(clientId) { return clientId ? S.msgs.filter(m => m.client_id === clientId && !m.from_admin && !m.read_at).length : 0; }
+function ticket(o) {
+  const sameDay = startOfDay(o.createdAt) === startOfDay(Date.now());
+  const unread = unreadFrom(o.clientId);
   return el('article', { class: 'ticket ' + (isCancelled(o) ? 't-cancelled' : o.paid ? 't-paid' : 't-unpaid'), 'data-id': o.id, tabindex: '0',
     onclick: () => orderSheet(o), onkeydown: e => { if (e.key === 'Enter') orderSheet(o); } },
     el('div', { class: 't-head' },
       el('span', { class: 't-no', text: orderNo(o.no) }),
       el('span', { class: 't-time', text: timeStr(o.createdAt) + (sameDay ? '' : ' · ' + dateShort(o.createdAt)) }),
+      hasNight() ? el('span', { class: 'tag svc ' + orderSvc(o), text: orderSvc(o) === 'night' ? '🌙' : '☀', title: SVC[orderSvc(o)] }) : null,
       o.source === 'shop' ? el('span', { class: 'tag shop', text: 'Shop' }) : null,
       el('span', { class: 'tag', text: o.type === 'delivery' ? 'Delivery' : 'Pickup' }),
+      unread ? el('span', { class: 'tag msg', text: '💬 ' + unread }) : null,
       payPill(o)),
     el('div', { class: 't-body' },
-      stepText(o) ? el('div', { class: 'stepnow', text: stepText(o) }) : null,
+      stepText(o) ? el('div', { class: 'stepnow', text: stepText(o) }) : isNew(o) && !isCancelled(o) ? el('div', { class: 'stepnow new', text: 'New · accept or cancel' }) : null,
       el('div', { class: 'who' }, whoAvatar(o, 'sm'), el('span', { class: 'who-nm' }, o.customerName || 'Walk-in', o.phone ? el('small', { text: o.phone }) : null)),
       o.address ? el('div', { class: 'addr', text: o.address }) : null,
       slotText(o) ? el('div', { class: 'when', text: '🕒 ' + slotText(o) }) : null,
       el('ul', { class: 'lines' }, itemLines(o)),
       o.note ? el('div', { class: 'note', text: o.note }) : null),
-    el('div', { class: 't-foot' }, el('span', { class: 't-total', text: money(o.total) }), acts));
+    el('div', { class: 't-foot' }, el('span', { class: 't-total', text: money(o.total) }), orderActions(o)));
+}
+/* private pictures (payment screenshot, delivery photo) shown inside the order */
+function privatePic(path, alt) {
+  const box = el('div', { class: 'receipt-box' });
+  if (!path) return box;
+  box.append(el('div', { class: 'sub', text: 'Loading picture…' }));
+  receiptSrc(path).then(src => box.replaceChildren(src
+    ? el('a', { href: src, target: '_blank', rel: 'noopener' }, el('img', { class: 'receipt', src, alt }))
+    : el('div', { class: 'sub', text: 'Picture not available right now (offline?).' })));
+  return box;
+}
+function copyText(t) {
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(() => toast('Copied'), () => toast(t));
+  else toast(t);
 }
 /* the whole order, tapped from its ticket */
 function orderSheet(o0) {
   const o = M.orders.get(o0.id) || o0;
-  const img = el('div', { class: 'receipt-box' });
-  if (o.payProof) {
-    img.append(el('div', { class: 'sub', text: 'Loading screenshot…' }));
-    receiptSrc(o.payProof).then(src => img.replaceChildren(src
-      ? el('a', { href: src, target: '_blank', rel: 'noopener' }, el('img', { class: 'receipt', src, alt: 'Payment screenshot' }))
-      : el('div', { class: 'sub', text: 'Screenshot not available right now (offline?).' })));
-  }
-  const payPart = isCancelled(o) ? null : o.paid
-    ? el('div', { class: 'sect' }, el('h3', { text: 'Payment' }),
-      el('div', {}, 'Paid with ', payLogo(o.payMethod), PAY[o.payMethod] || 'unknown', o.paidAt ? el('span', { class: 'sub', text: ' · ' + dateShort(o.paidAt) + ' ' + timeStr(o.paidAt) }) : null),
-      img,
+  const again = () => { const cur = M.orders.get(o.id); if (cur && !$('#modal').hidden) orderSheet(cur); };
+  const steps = [['new', 'Received'], ['accepted', 'Accepted'], ['ready', readyLabel(o)], ['done', doneLabel(o)]];
+  const at = steps.findIndex(([k]) => k === o.status), cur = at < 0 ? 0 : at;
+  const events = [['Placed', o.createdAt], ['Payment sent by client', o.paySubmittedAt], ['Accepted', o.acceptedAt], ['Paid', o.paid ? o.paidAt : 0],
+    [readyLabel(o), o.readyAt], [doneLabel(o), o.doneAt]].filter(([, t]) => t).sort((a, b) => a[1] - b[1]);
+  const unread = unreadFrom(o.clientId);
+  const pay = isCancelled(o) ? null : el('section', { class: 'od-sect' }, el('h3', { text: 'Payment' }),
+    o.paid ? el('div', { class: 'od-row' }, el('span', {}, 'Paid with ', payLogo(o.payMethod), PAY[o.payMethod] || 'unknown'), o.paidAt ? el('span', { class: 'sub', text: dateShort(o.paidAt) + ' ' + timeStr(o.paidAt) }) : null)
+      : o.paySubmittedAt ? el('div', { class: 'od-row' }, el('span', {}, 'Client says paid · ', payLogo(o.payMethod), (String(o.payMethod).endsWith('_chat') ? 'in ' : '') + (PAY[o.payMethod] || 'unknown')),
+        el('span', { class: 'sub', text: dateShort(o.paySubmittedAt) + ' ' + timeStr(o.paySubmittedAt) }))
+        : el('div', { class: 'sub', text: 'Not paid yet.' }),
+    o.payProof ? privatePic(o.payProof, 'Payment screenshot') : null,
+    el('div', { class: 'btns' },
+      el('button', { class: 'btn small' + (o.paid ? '' : ' pay'), type: 'button', onclick: () => payModal(o) }, o.paid ? 'Change payment' : o.paySubmittedAt ? 'Check & mark paid' : 'Mark paid'),
+      o.paid ? confirmBtn('Mark unpaid', o.payProof ? 'Unpaid + remove screenshot?' : 'Mark unpaid?', async () => {
+        if (await write(Store.put('orders', Object.assign({}, o, { paid: false, payMethod: '', payProof: '', paidAt: 0, payTouched: true }), photoDelOp(o.payProof)), 'Marked unpaid')) again();
+      }) : null));
+  const delivery = o.status === 'done' || o.deliveryProof ? el('section', { class: 'od-sect' }, el('h3', { text: doneLabel(o) }),
+    o.doneAt ? el('div', { class: 'sub', text: dateShort(o.doneAt) + ' ' + timeStr(o.doneAt) }) : null,
+    o.deliveryProof ? privatePic(o.deliveryProof, 'Delivery photo') : el('div', { class: 'sub', text: 'No photo.' }),
+    el('div', { class: 'btns' }, el('button', { class: 'btn small', type: 'button', onclick: () => deliveredModal(o) }, o.deliveryProof ? 'Change photo' : 'Add photo'))) : null;
+  openModal(el('div', { class: 'sheet od' },
+    el('div', { class: 'od-head' }, el('h2', { text: `Order ${orderNo(o.no)}` }),
+      hasNight() ? el('span', { class: 'tag svc ' + orderSvc(o), text: SVC[orderSvc(o)] }) : null, payPill(o)),
+    el('div', { class: 'sub', text: `${o.source === 'shop' ? 'Ordered in the shop' : 'Taken by you'} · ${dateShort(o.createdAt)} ${timeStr(o.createdAt)} · ${o.type === 'delivery' ? 'Delivery' : 'Pickup'}` }),
+    !isCancelled(o) ? el('div', { class: 'stepper', role: 'group', 'aria-label': 'Progress (the client sees this)' }, steps.map(([k, l], i) =>
+      el('button', { type: 'button', class: i < cur ? 'past' : i === cur ? 'now' : '', 'aria-pressed': i === cur, onclick: async () => { if (k === 'done') return deliveredModal(o); await setStatus(o, k); again(); } },
+        el('span', { class: 'dot', text: i < cur ? '✓' : i + 1 }), el('span', { text: l })))) : el('div', { class: 'err', text: 'Cancelled' }),
+    el('div', { class: 'od-acts' }, orderActions(o, again)),
+    el('section', { class: 'od-sect od-who' },
+      el('div', { class: 'who-head' }, whoAvatar(o, 'big'), el('div', { style: 'min-width:0' }, el('b', { text: o.customerName || 'Walk-in' }), o.phone ? el('div', { class: 'sub', text: o.phone }) : null)),
       el('div', { class: 'btns' },
-        el('button', { class: 'btn small', type: 'button', onclick: () => payModal(o) }, 'Change payment'),
-        confirmBtn('Mark unpaid', o.payProof ? 'Unpaid + remove screenshot?' : 'Mark unpaid?', async () => {
-          if (await write(Store.put('orders', Object.assign({}, o, { paid: false, payMethod: '', payProof: '', paidAt: 0, payTouched: true }), photoDelOp(o.payProof)), 'Marked unpaid')) closeModal();
-        })))
-    : el('div', { class: 'sect' }, el('h3', { text: 'Payment' }),
-      o.paySubmittedAt ? el('div', {}, 'Client says paid · ', payLogo(o.payMethod), (String(o.payMethod).endsWith('_chat') ? 'in ' : '') + (PAY[o.payMethod] || 'unknown'),
-        el('span', { class: 'sub', text: ' · ' + dateShort(o.paySubmittedAt) + ' ' + timeStr(o.paySubmittedAt) })) : el('div', { class: 'sub', text: 'Not paid yet.' }),
-      o.paySubmittedAt && o.payProof ? img : null,
-      el('div', { class: 'btns' }, el('button', { class: 'btn pay', type: 'button', onclick: () => payModal(o) }, o.paySubmittedAt ? 'Confirm paid' : 'Mark paid')));
-  openModal(el('div', { class: 'sheet' },
-    el('div', { class: 'od-head' }, el('h2', { text: `Order ${orderNo(o.no)}` }), payPill(o)),
-    el('div', { class: 'sub', text: `${o.source === 'shop' ? 'Ordered in the shop' : 'Taken'} ${dateShort(o.createdAt)} ${timeStr(o.createdAt)} · ${o.type === 'delivery' ? 'Delivery' : 'Pickup'}` }),
-    slotText(o) ? el('div', { class: 'when', text: '🕒 ' + slotText(o) }) : null,
-    el('div', { class: 'who-head' }, whoAvatar(o, 'big'), el('div', {}, el('b', { text: o.customerName || 'Walk-in' }), o.phone ? el('div', { class: 'sub', text: o.phone }) : null, o.address ? el('div', { class: 'sub', text: o.address }) : null)),
-    el('ul', { class: 'lines' }, itemLines(o)),
-    el('div', { class: 'sum total' }, el('span', { text: 'Total' }), el('span', { text: money(o.total) })),
-    o.note ? el('div', { class: 'note', text: o.note }) : null,
-    payPart,
-    !isCancelled(o) ? el('div', { class: 'sect' }, el('h3', { text: 'Progress (the client sees this)' }),
-      el('div', { class: 'seg', role: 'group' }, [['new', 'Received'], ['accepted', 'Accepted'], ['ready', o.type === 'delivery' ? 'On the way' : 'Ready'], ['done', 'Done']].map(([k, l]) =>
-        el('button', { type: 'button', 'aria-pressed': (o.status === k || (k === 'new' && !['accepted', 'ready', 'done'].includes(o.status))), onclick: async () => { await setStatus(o, k); orderSheet(o); } }, l)))) : null,
+        o.phone ? el('a', { class: 'btn small', href: 'tel:' + o.phone.replace(/[^\d+]/g, '') }, '📞 Call') : null,
+        o.phone ? el('button', { class: 'btn small', type: 'button', onclick: () => copyText(o.phone) }, 'Copy number') : null,
+        o.clientId ? el('button', { class: 'btn small', type: 'button', id: 'od-msg', onclick: () => chatSheet(o.clientId, o.no) }, '💬 Message' + (unread ? ` (${unread})` : '')) : null),
+      o.type === 'delivery' ? el('div', { class: 'od-row' }, el('span', { class: 'sub', text: 'Deliver to' }), el('b', { text: o.address || '—' })) : el('div', { class: 'od-row' }, el('span', { class: 'sub', text: 'Pickup' }), el('b', { text: 'At the kitchen' })),
+      el('div', { class: 'od-row' }, el('span', { class: 'sub', text: 'Time' }), el('b', { text: slotText(o) || [dayLabel(o.slotDate || isoDay(o.createdAt)), o.slot].filter(Boolean).join(' · ') || 'Not set' }))),
+    el('section', { class: 'od-sect' }, el('h3', { text: 'Items' }), el('ul', { class: 'lines' }, itemLines(o)),
+      el('div', { class: 'sum total' }, el('span', { text: 'Total' }), el('span', { text: money(o.total) })),
+      o.note ? el('div', { class: 'note', text: o.note }) : null),
+    pay, delivery,
+    el('section', { class: 'od-sect' }, el('h3', { text: 'Timeline' }),
+      el('ol', { class: 'timeline' }, events.map(([l, t]) => el('li', {}, el('span', { text: l }), el('span', { class: 'sub', text: dateShort(t) + ' ' + timeStr(t) }))))),
     el('div', { class: 'actions' },
-      isCancelled(o) ? el('button', { class: 'btn small left', type: 'button', onclick: () => { setStatus(o, 'new'); closeModal(); } }, 'Reopen')
-        : confirmBtn('Cancel order', 'Cancel it?', () => { setStatus(o, 'cancelled'); closeModal(); }, 'danger left'),
-      isCancelled(o) ? confirmBtn('Delete', 'Delete for good?', async () => { if (await write(Store.remove('orders', o.id, photoDelOp(o.payProof)), 'Order deleted')) closeModal(); }, 'danger') : null,
+      !isCancelled(o) && !isNew(o) && !(o.status === 'accepted' && !o.paid) ? confirmBtn('Cancel order', 'Cancel it?', async () => { await setStatus(o, 'cancelled'); again(); }, 'danger left') : null,
       el('button', { class: 'btn', type: 'button', onclick: closeModal }, 'Close'))));
+}
+/* Delivered / Picked up, with an optional photo the client can see */
+function deliveredModal(o0) {
+  const o = M.orders.get(o0.id) || o0;
+  let blob = null, prev = '', keep = !!o.deliveryProof;
+  const box = el('div', { class: 'photo-edit' });
+  const status = el('div', { class: 'sub' });
+  async function draw() {
+    const src = blob ? prev : (keep && o.deliveryProof ? await receiptSrc(o.deliveryProof) : '');
+    box.replaceChildren(src ? el('img', { class: 'receipt-thumb', src, alt: '' }) : el('div', { class: 'ph', style: '--h:140', text: '📦' }),
+      el('div', { style: 'display:flex;flex-direction:column;gap:6px' },
+        el('label', { class: 'btn small', style: 'text-align:center' }, src ? 'Change photo' : 'Take / add photo',
+          el('input', { type: 'file', accept: 'image/*', capture: 'environment', id: 'dl-file', style: 'display:none', onchange: async e => {
+            const f = e.target.files && e.target.files[0]; if (!f) return;
+            status.textContent = 'Preparing photo…';
+            try { blob = await shrinkPhoto(f, 1600, false); if (prev) URL.revokeObjectURL(prev); prev = URL.createObjectURL(blob); status.textContent = ''; draw(); }
+            catch (err) { status.textContent = ''; toast((err && err.message) || 'Could not read that picture.', true); }
+          } })),
+        src ? el('button', { class: 'link', type: 'button', onclick: () => { blob = null; keep = false; draw(); } }, 'Remove photo') : el('span', { class: 'sub', text: 'Optional · the client sees it' })));
+  }
+  async function save() {
+    let path = keep ? o.deliveryProof : '';
+    if (blob) { path = `${o.clientId || S.uid}/delivered-${newId()}.jpg`; try { await queuePhoto(path, blob); } catch (_) { return toast('Could not store the photo on this device.', true); } }
+    const extra = o.deliveryProof && o.deliveryProof !== path ? photoDelOp(o.deliveryProof) : [];
+    const rec = Object.assign({}, o, { status: 'done', deliveryProof: path, delTouched: true });
+    if (await write(Store.put('orders', rec, extra), `${orderNo(o.no)} ${doneLabel(o).toLowerCase()}`)) closeModal();
+  }
+  draw();
+  openModal(el('div', { class: 'sheet' }, el('h2', { text: `${doneLabel(o)} · ${orderNo(o.no)}` }),
+    el('div', { class: 'sub', text: `${o.customerName || 'Walk-in'}${o.address ? ' · ' + o.address : ''}` }),
+    o.paid ? null : el('div', { class: 'banner' }, el('span', { text: 'This order is not marked paid yet.' })),
+    el('div', { class: 'field' }, el('label', { text: o.type === 'delivery' ? 'Delivery photo' : 'Photo' }), box, status),
+    el('div', { class: 'actions' }, el('button', { class: 'btn', type: 'button', onclick: closeModal }, 'Cancel'),
+      el('button', { class: 'btn done', type: 'button', id: 'dl-save', onclick: save }, `Mark ${doneLabel(o).toLowerCase()}`))));
 }
 /* record a payment: WeChat Pay or Alipay, optional screenshot */
 function payModal(o0) {
@@ -910,7 +1004,7 @@ function menuResults(root) {
     root.append(el('h2', { class: 'cat-title' }, c, el('span', { text: arr.length + (arr.length === 1 ? ' dish' : ' dishes') })));
     root.append(el('div', { class: 'mlist' }, arr.map(m => el('div', { class: 'mrow' + (m.available === false ? ' off' : '') },
       thumb(m, ''),
-      el('div', {}, el('div', { class: 'nm', text: m.name }),
+      el('div', {}, el('div', { class: 'nm', text: m.name + (m.service === 'night' ? ' 🌙' : '') }),
         el('div', { class: 'pr', text: (m.variants || []).map(v => (v.label ? v.label + ' ' : '') + money(v.price)).join(' · ') }),
         (m.windows || []).length ? el('div', { class: 'pr', text: '🕒 ' + m.windows.map(winLabel).join(', ') }) : null),
       el('div', { class: 'ctl' },
@@ -937,6 +1031,11 @@ function menuModal(item) {
   if (!m.variants || !m.variants.length) m.variants = [{ label: '', price: '' }];
   const oldPhoto = m.photo || '';
   m.windows = Array.isArray(m.windows) ? clone(m.windows) : [];
+  m.service = m.service === 'night' ? 'night' : 'day';
+  const svcSeg = el('div', { class: 'seg', role: 'group', 'aria-label': 'Day or night' });
+  const drawSvc = () => svcSeg.replaceChildren(...[['day', SVC.day], ['night', SVC.night]].map(([k, l]) =>
+    el('button', { type: 'button', id: 'f-svc-' + k, 'aria-pressed': m.service === k, onclick: () => { m.service = k; drawSvc(); } }, l)));
+  drawSvc();
   let newBlob = null, previewUrl = '';
   const wbox = el('div', { class: 'win-list' });
   const drawWins = () => wbox.replaceChildren(...m.windows.map((w, i) => el('div', { class: 'win-row' },
@@ -986,7 +1085,8 @@ function menuModal(item) {
     const windows = m.windows.filter(w => w.from && w.to);
     if (windows.some(w => w.from >= w.to)) return toast('A time window ends before it starts.', true);
     const rec = { id: item ? item.id : newId(), name, category: (m.category || '').trim() || 'Other', description: (m.description || '').trim(), variants, photo, available: m.available !== false, example: false,
-      windows, winTouched: !!(windows.length || (item && item.winTouched)) };
+      windows, winTouched: !!(windows.length || (item && item.winTouched)),
+      service: m.service, svcTouched: !!(m.service === 'night' || (item && item.svcTouched)) };
     if (await write(Store.put('menu', rec, extra), 'Saved')) closeModal();
   }
   drawVariants(); drawPhoto(); drawWins();
@@ -999,12 +1099,103 @@ function menuModal(item) {
       el('button', { class: 'link', type: 'button', style: 'margin-top:8px', onclick: () => { m.variants.push({ label: '', price: '' }); drawVariants(); } }, '+ Add another size')),
     el('div', {}, el('div', { class: 'sub', style: 'margin-bottom:6px', text: 'Time windows (optional). When this dish can be delivered or picked up, e.g. 12:00 to 14:00. Leave empty for any time.' }), wbox,
       el('button', { class: 'link', type: 'button', style: 'margin-top:8px', onclick: () => { m.windows.push({ from: '12:00', to: '14:00' }); drawWins(); } }, '+ Add time window')),
+    el('div', { class: 'field' }, el('label', { text: 'Sold during' }), svcSeg,
+      el('div', { class: 'sub', text: 'Day and night dishes are ordered separately, and orders are split into Day / Night.' })),
     el('label', { class: 'switch' }, el('input', { type: 'checkbox', checked: m.available !== false, onchange: e => { m.available = e.target.checked; } }), 'Available today'),
     el('div', { class: 'actions' },
       item ? confirmBtn('Delete dish', 'Delete for good?', async () => { if (await write(Store.remove('menu', item.id, photoDelOp(oldPhoto)), 'Dish deleted')) closeModal(); }, 'danger left') : null,
       el('button', { class: 'btn', type: 'button', onclick: closeModal }, 'Cancel'),
       el('button', { class: 'btn primary', type: 'button', id: 'f-save', onclick: save }, 'Save dish')));
   openModal(sheet);
+}
+
+/* ---------- MESSAGES (one conversation per customer; needs internet) ---------- */
+let msgTimer = 0, chatOpen = null;
+function loadMsgsSoon(ms) { clearTimeout(msgTimer); msgTimer = setTimeout(loadMsgs, ms == null ? 300 : ms); }
+async function loadMsgs() {
+  if (!sb || !S.signedIn || S.notAdmin) return;
+  try {
+    const { data, error } = await sb.from('messages').select('*').order('created_at', { ascending: false }).limit(1500);
+    if (error) { if (/messages|relation|schema cache/i.test(error.message || '')) { S.msgsOff = true; scheduleRender(); } return; }
+    S.msgsOff = false; S.msgs = (data || []).reverse();
+    if (chatOpen) chatOpen.draw();
+    scheduleRender();
+  } catch (_) { /* offline: try on the next sync */ }
+}
+const unreadAll = () => S.msgs.filter(m => !m.from_admin && !m.read_at).length;
+function threadName(clientId) {
+  const c = S.customers.find(x => x.userId === clientId);
+  if (c) return c.name;
+  const o = S.orders.filter(x => x.clientId === clientId).sort((a, b) => b.createdAt - a.createdAt)[0];
+  return o ? o.customerName : 'Customer (no order yet)';
+}
+function threads() {
+  const by = new Map();
+  for (const m of S.msgs) { const t = by.get(m.client_id) || { id: m.client_id, last: null, unread: 0 }; t.last = m; if (!m.from_admin && !m.read_at) t.unread++; by.set(m.client_id, t); }
+  return [...by.values()].sort((a, b) => (a.last.created_at < b.last.created_at ? 1 : -1));
+}
+function viewMessages(root) {
+  root.append(pageHead('Messages', 'Chats with your shop customers.'));
+  if (S.msgsOff) { root.append(el('div', { class: 'banner err' }, el('span', { text: 'Messages are not set up yet: run update-2.3.sql in Supabase.' }))); return; }
+  if (!S.signedIn || navigator.onLine === false) root.append(el('div', { class: 'banner' }, el('span', { text: 'Messages need internet.' })));
+  const list = threads();
+  if (!list.length) { root.append(el('div', { class: 'empty' }, el('b', { text: 'No messages yet' }), 'When a customer writes from the shop, it shows up here.')); return; }
+  root.append(el('div', { class: 'threads' }, list.map(t => {
+    const name = threadName(t.id);
+    return el('button', { class: 'thread' + (t.unread ? ' unread' : ''), type: 'button', onclick: () => chatSheet(t.id) },
+      avatar({ name }, 'sm'),
+      el('span', { class: 'th-mid' }, el('b', { text: name }), el('small', { text: (t.last.from_admin ? 'You: ' : '') + (t.last.order_no ? orderNo(t.last.order_no) + ' · ' : '') + t.last.body })),
+      el('span', { class: 'th-end' }, el('small', { text: ago(Date.parse(t.last.created_at)) }), t.unread ? el('span', { class: 'badge', text: t.unread }) : null));
+  })));
+}
+function chatSheet(clientId, orderNoHint) {
+  const name = threadName(clientId);
+  const list = el('div', { class: 'chat-list' });
+  const input = el('textarea', { id: 'chat-in', rows: 1, placeholder: 'Write a message…', maxlength: 1000 });
+  let about = orderNoHint || null;
+  const tag = el('div', { class: 'chat-about' });
+  const drawTag = () => tag.replaceChildren(...(about ? [el('span', { text: 'About order ' + orderNo(about) }), el('button', { class: 'link', type: 'button', onclick: () => { about = null; drawTag(); } }, 'remove')] : []));
+  async function markRead() {
+    const ids = S.msgs.filter(m => m.client_id === clientId && !m.from_admin && !m.read_at).map(m => m.id);
+    if (!ids.length) return;
+    const now = new Date().toISOString();
+    for (const m of S.msgs) if (ids.includes(m.id)) m.read_at = now;
+    scheduleRender();
+    try { await sb.from('messages').update({ read_at: now }).in('id', ids); } catch (_) { /* next time */ }
+  }
+  function draw() {
+    const mine = S.msgs.filter(m => m.client_id === clientId);
+    let lastDay = '';
+    list.replaceChildren(...mine.flatMap(m => {
+      const t = Date.parse(m.created_at), d = dateShort(t), out = [];
+      if (d !== lastDay) { lastDay = d; out.push(el('div', { class: 'chat-day', text: d })); }
+      out.push(el('div', { class: 'bubble ' + (m.from_admin ? 'me' : 'them') },
+        m.order_no ? el('span', { class: 'b-order', text: orderNo(m.order_no) }) : null,
+        el('span', { class: 'b-text', text: m.body }), el('small', { text: timeStr(t) + (m.from_admin && m.read_at ? ' · read' : '') })));
+      return out;
+    }));
+    if (!mine.length) list.append(el('div', { class: 'sub', style: 'text-align:center;padding:20px', text: 'No messages yet. Say hello.' }));
+    list.scrollTop = list.scrollHeight;
+    markRead();
+  }
+  async function send() {
+    const body = input.value.trim(); if (!body) return;
+    const btn = $('#chat-send'); btn.disabled = true;
+    try {
+      const { data, error } = await sb.from('messages').insert({ client_id: clientId, body, from_admin: true, order_no: about }).select().single();
+      if (error) throw error;
+      S.msgs.push(data); input.value = ''; draw();
+    } catch (e) { toast('Could not send: ' + ((e && e.message) || 'no internet?'), true); }
+    btn.disabled = false; input.focus();
+  }
+  input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+  drawTag();
+  openModal(el('div', { class: 'sheet chat' },
+    el('div', { class: 'chat-head' }, avatar({ name }, 'sm'), el('h2', { text: name }), el('button', { class: 'x', type: 'button', 'aria-label': 'Close', onclick: closeModal }, '✕')),
+    list, tag,
+    el('div', { class: 'chat-bar' }, input, el('button', { class: 'btn primary', type: 'button', id: 'chat-send', onclick: send }, 'Send'))));
+  chatOpen = { clientId, draw };
+  draw();
 }
 
 /* ---------- CUSTOMERS ---------- */

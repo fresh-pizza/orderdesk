@@ -11,7 +11,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   phoneDomain: 'phone.orderdesk.app', // phone logins are stored as <digits>@this, no SMS involved
 };
-const SHOP_VERSION = '1.2.1';
+const SHOP_VERSION = '1.3.0';
 
 /* ---------- helpers ---------- */
 function el(tag, props, ...kids) {
@@ -64,6 +64,7 @@ const S = {
   basket: store.get('basket', []), // [{menuId, variant, qty}]
   draft: Object.assign({ type: 'delivery', address: '', slotDate: '', slot: '', note: '', name: '', phone: '' }, store.get('draft', {})),
   session: null, orders: [], lastOrder: null, loaded: false, loadErr: '',
+  svc: store.get('svc', new Date().getHours() >= 16 ? 'night' : 'day'), msgs: [], msgsOff: false, chatAbout: null,
 };
 const money = n => { n = Number(n) || 0; const a = Math.abs(n); return (n < 0 ? '−' : '') + (S.biz.currency || '') + (Number.isInteger(a) ? a : a.toFixed(2)); };
 const feeText = f => (f ? money(f) : 'Free');
@@ -98,32 +99,94 @@ const niceErr = e => {
   return m;
 };
 
-/* ---------- top bar ---------- */
+/* ---------- top bar + bottom tabs ---------- */
+const TAB_ICONS = {
+  menu: '<path d="M4 5h16M4 12h16M4 19h10"/>',
+  orders: '<path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6"/>',
+  me: '<circle cx="12" cy="8" r="4"/><path d="M4 21c1.2-4 4.3-6 8-6s6.8 2 8 6"/>',
+};
+const activeOrders = () => S.orders.filter(o => o.status !== 'done' && o.status !== 'cancelled');
+const unreadMsgs = () => S.msgs.filter(m => m.from_admin && !m.read_at).length;
 function renderTop() {
-  const n = S.orders.filter(o => o.status !== 'done' && o.status !== 'cancelled').length;
-  $('#top').replaceChildren(
-    el('button', { class: 'biz', type: 'button', onclick: () => go('menu') }, S.biz.name || 'Order food'),
-    el('button', { class: 'tab', type: 'button', 'aria-current': S.view === 'menu' ? 'page' : false, onclick: () => go('menu') }, 'Menu'),
-    el('button', { class: 'tab', type: 'button', id: 'tab-orders', 'aria-current': S.view === 'orders' ? 'page' : false, onclick: () => go('orders') }, 'My orders' + (n ? ` (${n})` : '')));
+  $('#top').replaceChildren(el('button', { class: 'biz', type: 'button', onclick: () => go('menu') }, S.biz.name || 'Order food'));
   document.title = S.biz.name ? `${S.biz.name} · Order` : 'Order food';
+  const tabOf = { menu: 'menu', checkout: 'menu', done: 'orders', orders: 'orders', me: 'me', chat: 'me' }[S.view] || 'menu';
+  const badge = { orders: activeOrders().length, me: unreadMsgs() };
+  $('#tabs').replaceChildren(...[['menu', 'Menu'], ['orders', 'Orders'], ['me', 'Me']].map(([k, l]) => {
+    const b = el('button', { type: 'button', id: 'tab-' + k, 'aria-current': tabOf === k ? 'page' : false, onclick: () => go(k) });
+    b.innerHTML = `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${TAB_ICONS[k]}</svg>`;
+    b.append(el('span', { text: l }), badge[k] ? el('span', { class: 'tbadge', text: badge[k] }) : '');
+    return b;
+  }));
+  document.body.classList.toggle('no-tabs', S.view === 'checkout' || S.view === 'chat');
 }
-function go(v) { S.view = v; render(); window.scrollTo(0, 0); if (v === 'orders') loadOrders(); }
+/* account: who is signed in */
+function whoAmI() {
+  const u = S.session && S.session.user;
+  if (!u) return null;
+  if (u.is_anonymous) return { kind: 'Guest', id: 'Guest on this phone' };
+  const e = u.email || '';
+  return e.endsWith('@' + CFG.phoneDomain) ? { kind: 'Phone', id: e.replace('@' + CFG.phoneDomain, '') } : { kind: 'Email', id: e };
+}
+async function signOutShop() { await sb.auth.signOut({ scope: 'local' }); S.session = null; S.orders = []; S.msgs = []; render(); toast('Signed out'); }
+function viewMe(root) {
+  const me = whoAmI();
+  root.append(el('h1', { class: 'page-h', text: 'Me' }));
+  if (!me) {
+    root.append(el('div', { class: 'box' }, el('b', { text: 'Not signed in' }),
+      el('p', { class: 'fineprint', text: 'Sign in to see your orders and message us. You can also just order: we ask how you want to sign in at checkout.' }),
+      el('button', { class: 'btn primary big-btn', type: 'button', id: 'me-signin', onclick: () => authSheet(() => render()) }, 'Sign in')));
+    return;
+  }
+  const un = unreadMsgs();
+  root.append(
+    el('div', { class: 'box' }, el('div', { class: 'acct-card' }, el('span', { class: 'acct-kind', text: me.kind }), el('b', { id: 'me-id', text: me.id })),
+      me.kind === 'Guest' ? el('p', { class: 'fineprint', text: 'Guest orders are saved on this phone only. Create a phone or email account to see your orders on any phone.' }) : null,
+      el('div', { class: 'btnrow' },
+        me.kind === 'Guest' ? el('button', { class: 'btn', type: 'button', onclick: () => authSheet(() => render()) }, 'Use phone or email') : null,
+        el('button', { class: 'btn danger', type: 'button', id: 'acct-out', onclick: signOutShop }, 'Sign out'))),
+    S.msgsOff ? null : el('button', { class: 'me-row', type: 'button', id: 'me-chat', onclick: () => openChat(null) },
+      el('span', { class: 'me-ic', text: '💬' }), el('span', { class: 'me-mid' }, el('b', { text: 'Messages' }), el('small', { text: un ? `${un} new from ${S.biz.name || 'us'}` : `Chat with ${S.biz.name || 'us'}` })),
+      un ? el('span', { class: 'tbadge static', text: un }) : el('span', { class: 'chev', text: '›' })),
+    el('button', { class: 'me-row', type: 'button', onclick: () => go('orders') },
+      el('span', { class: 'me-ic', text: '🧾' }), el('span', { class: 'me-mid' }, el('b', { text: 'My orders' }), el('small', { text: `${S.orders.length} order${S.orders.length === 1 ? '' : 's'}` })), el('span', { class: 'chev', text: '›' })));
+}
+function go(v) { S.view = v; render(); window.scrollTo(0, 0); if (v === 'orders') loadOrders(); if (v === 'me') loadMsgs(); }
 function render() {
   document.body.dataset.view = S.view;
   renderTop();
   const main = $('#main');
   main.replaceChildren();
   if (!S.loaded) { main.append(el('div', { class: 'splash', text: S.loadErr || 'Loading the menu…' })); renderBar(); return; }
-  ({ menu: viewMenu, checkout: viewCheckout, orders: viewOrders, done: viewDone })[S.view](main);
+  ({ menu: viewMenu, checkout: viewCheckout, orders: viewOrders, done: viewDone, me: viewMe, chat: viewChat })[S.view](main);
   renderBar();
 }
 
 /* ---------- menu ---------- */
 function basketCount() { return S.basket.reduce((a, l) => a + l.qty, 0); }
 function basketTotal() { return S.basket.reduce((a, l) => { const m = dish(l.menuId); return a + (m ? priceOf(m, l.variant) * l.qty : 0); }, 0); }
+const svcOf = m => (m && m.service === 'night' ? 'night' : 'day');
+const SVC = { day: '☀ Day menu', night: '🌙 Night menu' };
+/* the order that needs the customer's attention, shown above the menu */
+function actionBanner() {
+  const o = activeOrders().filter(x => !x.paid).sort((a, b) => (a.created_at < b.created_at ? 1 : -1))[0] || activeOrders()[0];
+  if (!o) return null;
+  const st = o.status === 'accepted' ? 'Accepted' : o.status === 'ready' ? (o.type === 'delivery' ? 'On the way' : 'Ready') : 'Sent · waiting for the kitchen';
+  const canPay = !o.paid && !o.pay_submitted_at;
+  return el('div', { class: 'act-banner' + (canPay && o.status !== 'new' ? ' hot' : ''), id: 'act-banner' },
+    el('button', { class: 'ab-main', type: 'button', onclick: () => go('orders') }, el('b', { text: `Order #${pad3(o.no)}` }), el('span', { text: st + (o.paid ? ' · paid' : o.pay_submitted_at ? ' · payment sent' : '') })),
+    canPay ? el('button', { class: 'ab-pay', type: 'button', id: 'ab-pay', onclick: () => payModal(o) }, `Pay ${money(o.total)}`) : null);
+}
 function viewMenu(root) {
-  const menu = S.menu.filter(m => !m.deleted);
-  if (!menu.length) { root.append(el('div', { class: 'empty' }, el('b', { text: 'The menu is empty right now' }), 'Please check back later.')); return; }
+  const all = S.menu.filter(m => !m.deleted);
+  if (!all.length) { root.append(el('div', { class: 'empty' }, el('b', { text: 'The menu is empty right now' }), 'Please check back later.')); return; }
+  const ban = actionBanner(); if (ban) root.append(ban);
+  const both = all.some(m => svcOf(m) === 'night') && all.some(m => svcOf(m) === 'day');
+  if (both) {
+    root.append(el('div', { class: 'svc-switch', role: 'group', 'aria-label': 'Day or night menu' }, ['day', 'night'].map(k =>
+      el('button', { type: 'button', class: k, id: 'svc-' + k, 'aria-pressed': S.svc === k, onclick: () => { S.svc = k; store.set('svc', k); S.cat = 'All'; render(); } }, SVC[k]))));
+  }
+  const menu = both ? all.filter(m => svcOf(m) === S.svc) : all;
   const cats = ['All', ...new Set(menu.map(m => m.category || 'Other'))];
   if (!cats.includes(S.cat)) S.cat = 'All';
   root.append(el('div', { class: 'chips' }, cats.map(c => el('button', { class: 'chip', type: 'button', 'aria-pressed': S.cat === c, onclick: () => { S.cat = c; render(); } }, c))));
@@ -149,6 +212,15 @@ function dishCard(m) {
           : el('button', { class: 'add' + (inB ? ' in' : ''), type: 'button', 'aria-label': `Add ${m.name}`, onclick: () => addDish(m) }, inB ? `${inB} ✓` : '+'))));
 }
 function addDish(m) {
+  // day and night dishes are separate orders
+  const inBasket = S.basket.map(l => dish(l.menuId)).find(Boolean);
+  if (inBasket && svcOf(inBasket) !== svcOf(m)) {
+    openModal(el('div', { class: 'sheet' }, el('h2', { text: 'Separate order' }),
+      el('p', { class: 'sub', text: `Your basket has ${svcOf(inBasket)} dishes. Day and night dishes are ordered separately.` }),
+      el('div', { class: 'actions' }, el('button', { class: 'btn', type: 'button', onclick: closeModal }, 'Keep my basket'),
+        el('button', { class: 'btn primary', type: 'button', id: 'svc-clear', onclick: () => { S.basket = []; saveBasket(); closeModal(); addDish(m); } }, 'Empty basket, add this'))));
+    return;
+  }
   const vs = m.variants && m.variants.length ? m.variants : [{ label: '', price: 0 }];
   const put = v => {
     const l = S.basket.find(x => x.menuId === m.id && x.variant === (v.label || ''));
@@ -165,7 +237,7 @@ function addDish(m) {
 function renderBar() {
   const n = basketCount();
   const bar = $('#bar');
-  if (!n || S.view === 'checkout' || S.view === 'done') { bar.replaceChildren(); return; }
+  if (!n || S.view !== 'menu') { bar.replaceChildren(); return; }
   const d = S.draft, fee = d.type === 'pickup' ? null : addrFee(d.address);
   const feeLine = d.type === 'pickup' ? 'Pickup · no delivery fee'
     : fee !== null ? (fee ? `+ delivery ${money(fee)} · ${d.address}` : `Free delivery · ${d.address}`) : '+ delivery fee by address';
@@ -185,7 +257,9 @@ function renderBar() {
 function orderWindows() {
   const withWin = S.basket.map(l => dish(l.menuId)).filter(m => m && (m.windows || []).length);
   const all = new Set();
-  for (const m of (withWin.length ? withWin : S.menu)) for (const w of (m.windows || [])) all.add(winLabel(w));
+  const first = S.basket.map(l => dish(l.menuId)).find(Boolean);
+  const same = S.menu.filter(m => !first || svcOf(m) === svcOf(first));
+  for (const m of (withWin.length ? withWin : same)) for (const w of (m.windows || [])) all.add(winLabel(w));
   let list = [...all];
   if (withWin.length) list = list.filter(x => withWin.every(m => m.windows.some(w => winLabel(w) === x)));
   return { list: list.sort(), clash: withWin.length > 0 && !list.length };
@@ -223,20 +297,22 @@ function viewCheckout(root) {
           el('option', { value: '', text: 'Choose your address…' }),
           (S.biz.addresses || []).map(a => el('option', { value: a.name, selected: a.name === d.address, text: `${a.name} — ${feeText(num(a.fee))}` })))) : null,
       el('div', { class: 'field' }, el('label', { text: d.type === 'delivery' ? 'Delivery time' : 'Pickup time' }),
-        el('div', { class: 'two' },
+        el('div', { class: list.length ? 'two' : '' },
           el('select', { id: 'c-day', 'aria-label': 'Day', onchange: e => { d.slotDate = e.target.value; } }, dates.map(x => el('option', { value: x, selected: x === d.slotDate, text: dayLabel(x) }))),
-          el('select', { id: 'c-slot', 'aria-label': 'Time', onchange: e => { d.slot = e.target.value; } },
-            el('option', { value: '', text: 'ASAP' }), list.map(x => el('option', { value: x, selected: x === d.slot, text: x })))),
+          list.length ? el('select', { id: 'c-slot', 'aria-label': 'Time', onchange: e => { d.slot = e.target.value; } },
+            el('option', { value: '', text: 'Choose a time…', disabled: true, selected: !d.slot }), list.map(x => el('option', { value: x, selected: x === d.slot, text: x }))) : null),
         clash ? el('div', { class: 'err', text: 'These dishes are served at different times. Please order them separately.' }) : null)),
     el('div', { class: 'box' }, el('h2', {}, el('span', { class: 'stepn', text: '3' }), 'Your details'),
-      el('div', { class: 'two' }, fld('c-name', 'Name', 'name', { autocomplete: 'name' }), fld('c-phone', 'Phone (for the rider)', 'phone', { type: 'tel', inputmode: 'tel', autocomplete: 'tel' })),
+      fld('c-name', 'WeChat name', 'name', { autocomplete: 'nickname', placeholder: 'Your WeChat name', maxlength: 80 }),
+      el('div', { class: 'fineprint', style: 'margin-top:-6px', text: 'Your WeChat name helps us find you and deliver your order.' }),
+      fld('c-phone', 'Phone (for the rider)', 'phone', { type: 'tel', inputmode: 'tel', autocomplete: 'tel' }),
       el('div', { class: 'field' }, el('label', { for: 'c-note', text: 'Note for the kitchen (optional)' }),
         el('textarea', { id: 'c-note', value: d.note || '', placeholder: 'Less spicy, extra raita…', oninput: e => { d.note = e.target.value; store.set('draft', d); } }))),
     el('div', { class: 'box sumbox' },
       el('div', { class: 'sumrow' }, el('span', { text: 'Items' }), el('span', { text: money(sub) })),
       d.type === 'delivery' ? el('div', { class: 'sumrow' }, el('span', { text: 'Delivery' + (d.address ? ' · ' + d.address : '') }), el('span', { text: d.address ? feeText(fee) : '–' })) : null,
       el('div', { class: 'sumrow total' }, el('span', { text: 'Total' }), el('span', { id: 'c-total', text: money(sub + fee) })),
-      el('div', { class: 'fineprint', text: 'You pay by WeChat Pay or Alipay right after placing the order. We start cooking once payment is confirmed. To change or cancel an order, message us on WeChat.' }),
+      el('div', { class: 'fineprint', text: 'Pay by WeChat Pay or Alipay, now or later. We start cooking once payment is confirmed. To change or cancel an order, message us.' }),
       err,
       el('button', { class: 'btn primary big-btn', type: 'button', id: 'c-place', disabled: clash, onclick: () => placeOrder(err) }, S.session ? 'Place order' : 'Continue')));
 }
@@ -244,7 +320,8 @@ async function placeOrder(err) {
   const d = S.draft;
   err.textContent = '';
   if (d.type === 'delivery' && addrFee(d.address) === null) { err.textContent = 'Choose your delivery address.'; return; }
-  if (!(d.name || '').trim()) { err.textContent = 'Please add your name.'; return; }
+  if (orderWindows().list.length && !d.slot) { err.textContent = `Choose a ${d.type === 'delivery' ? 'delivery' : 'pickup'} time.`; return; }
+  if (!(d.name || '').trim()) { err.textContent = 'Please add your WeChat name.'; $('#c-name').focus(); return; }
   if ((d.phone || '').replace(/\D/g, '').length < 5) { err.textContent = 'Please add your phone number.'; return; }
   if (!S.session) { authSheet(() => placeOrder(err)); return; }
   const btn = $('#c-place'); btn.disabled = true; btn.textContent = 'Placing your order…';
@@ -257,7 +334,7 @@ async function placeOrder(err) {
     S.lastOrder = data; S.basket = []; d.note = ''; saveBasket();
     S.orders = [data, ...S.orders.filter(o => o.id !== data.id)];
     go('done');
-    payModal(data); // ask them to pay straight away
+    payModal(data); // offer to pay now (Pay later is the first choice)
   } catch (e) { err.textContent = niceErr(e); btn.disabled = false; btn.textContent = 'Place order'; }
 }
 
@@ -317,7 +394,7 @@ async function onSession(session) {
     const p = data && data[0];
     if (p) { if (!S.draft.name) S.draft.name = p.name || ''; if (!S.draft.phone) S.draft.phone = p.phone || ''; if (!S.draft.address && addrFee(p.address) !== null) S.draft.address = p.address; }
   } catch (_) { /* fine */ }
-  listen(); loadOrders();
+  listen(); loadOrders(); loadMsgs();
 }
 
 /* ---------- payment ---------- */
@@ -350,8 +427,8 @@ function payBox(o) {
     el('b', {}, payLogo(o.pay_method), o.pay_proof ? 'Screenshot sent' : `You paid in ${APP[w ? w.base : 'wechat']} chat`),
     el('span', { class: 'fineprint', text: 'We are checking your payment and start cooking once it is confirmed.' }),
     el('button', { class: 'btn small', type: 'button', onclick: () => payModal(o) }, 'Change or send a screenshot'));
-  return el('div', { class: 'paybox' }, el('b', { text: `Please pay ${money(o.total)}` }),
-    el('span', { class: 'fineprint', text: 'We start cooking once your payment is confirmed.' }),
+  return el('div', { class: 'paybox' }, el('b', { text: `Not paid yet · ${money(o.total)}` }),
+    el('span', { class: 'fineprint', text: 'Pay whenever you are ready. We start cooking once payment is confirmed.' }),
     el('button', { class: 'btn primary', type: 'button', id: 'pay-' + o.no, onclick: () => payModal(o) }, 'Pay now'));
 }
 async function saveQr(path, name) {
@@ -379,10 +456,12 @@ function payModal(o) {
       try { blob = await shrink(f); if (prev) URL.revokeObjectURL(prev); prev = URL.createObjectURL(blob); onPick(); } catch (x) { err.textContent = niceErr(x); }
     } }));
   function drawChoose() {
-    sheet.replaceChildren(el('h2', { text: `Pay ${money(o.total)}` }), el('div', { class: 'sub', text: `Order #${pad3(o.no)} · choose how you pay` }),
-      el('div', { class: 'payways' }, ways.map(k => el('button', { class: 'payway', type: 'button', id: 'way-' + k, onclick: () => { way = k; drawWay(); } },
-        payLogo(k), el('span', {}, el('b', { text: PAYWAYS[k].title }), el('small', { text: PAYWAYS[k].hint })), el('span', { class: 'chev', text: '›' })))),
-      el('div', { class: 'actions' }, el('button', { class: 'btn', type: 'button', onclick: closeModal }, 'Pay later')));
+    sheet.replaceChildren(el('h2', { text: `Order #${pad3(o.no)} · ${money(o.total)}` }), el('div', { class: 'sub', text: 'Pay now or later, whatever suits you.' }),
+      el('div', { class: 'payways' },
+        el('button', { class: 'payway later', type: 'button', id: 'way-later', onclick: closeModal },
+          el('span', { class: 'later-ic', text: '🕒' }), el('span', {}, el('b', { text: 'Pay later' }), el('small', { text: 'Pay any time from My orders' })), el('span', { class: 'chev', text: '›' })),
+        ways.map(k => el('button', { class: 'payway', type: 'button', id: 'way-' + k, onclick: () => { way = k; drawWay(); } },
+          payLogo(k), el('span', {}, el('b', { text: PAYWAYS[k].title }), el('small', { text: PAYWAYS[k].hint })), el('span', { class: 'chev', text: '›' })))));
   }
   function drawWay() {
     const w = PAYWAYS[way], isQr = !way.endsWith('_chat'), app = APP[w.base];
@@ -437,52 +516,138 @@ const pad3 = n => String(n || 0).padStart(3, '0');
 function viewDone(root) {
   const o = S.lastOrder;
   if (!o) { go('menu'); return; }
-  root.append(el('div', { class: 'done-hero' }, el('h1', { text: 'Order received' }), el('div', { class: 'no', text: '#' + pad3(o.no) }),
-    el('p', { class: 'sub', text: `${o.type === 'delivery' ? 'Delivery to ' + o.address : 'Pickup'} · ${dayLabel(o.slot_date) || 'Today'}${o.slot ? ' · ' + o.slot : ' · as soon as possible'}` })),
+  root.append(el('div', { class: 'done-hero' }, el('h1', { text: 'Order sent' }), el('div', { class: 'no', text: '#' + pad3(o.no) }),
+    el('p', { class: 'sub', text: `${o.type === 'delivery' ? 'Delivery to ' + o.address : 'Pickup'} · ${[dayLabel(o.slot_date) || 'Today', o.slot].filter(Boolean).join(' · ')}` }),
+    el('p', { class: 'sub', text: 'We will accept it shortly. You can follow it in Orders.' })),
   orderCard(o), el('button', { class: 'btn big-btn', type: 'button', onclick: () => go('orders') }, 'See all my orders'));
 }
 const STEPS = ['new', 'accepted', 'ready', 'done'];
-function stepLabel(o, s) { return { new: 'Received', accepted: 'Accepted', ready: o.type === 'delivery' ? 'On the way' : 'Ready', done: 'Done' }[s]; }
+function stepLabel(o, s) { return { new: 'Sent', accepted: 'Accepted', ready: o.type === 'delivery' ? 'On the way' : 'Ready', done: o.type === 'delivery' ? 'Delivered' : 'Picked up' }[s]; }
+function statusLine(o) {
+  return { new: 'Waiting for the kitchen to accept', accepted: o.paid ? 'Accepted · being cooked' : 'Accepted', ready: o.type === 'delivery' ? 'On the way to you' : 'Ready for pickup',
+    done: o.type === 'delivery' ? 'Delivered · enjoy!' : 'Picked up · enjoy!' }[STEPS.includes(o.status) ? o.status : 'new'];
+}
+const picCache = new Map();
+function privatePic(path, alt) { // delivery photo (only you and the kitchen can see it)
+  const box = el('div', { class: 'proof' });
+  const show = u => box.replaceChildren(el('a', { href: u, target: '_blank', rel: 'noopener' }, el('img', { src: u, alt })));
+  if (picCache.has(path)) { show(picCache.get(path)); return box; }
+  box.append(el('span', { class: 'fineprint', text: 'Loading photo…' }));
+  sb.storage.from('receipts').download(path).then(({ data }) => {
+    if (!data) { box.replaceChildren(el('span', { class: 'fineprint', text: 'Photo not available right now.' })); return; }
+    const u = URL.createObjectURL(data); picCache.set(path, u); show(u);
+  }).catch(() => box.replaceChildren());
+  return box;
+}
 function orderCard(o) {
-  const idx = STEPS.indexOf(o.status), when = [dayLabel(o.slot_date), o.slot].filter(Boolean).join(' · ');
+  const st = STEPS.includes(o.status) ? o.status : 'new';
+  const idx = STEPS.indexOf(st), when = [dayLabel(o.slot_date), o.slot].filter(Boolean).join(' · ');
   return el('article', { class: 'ocard', 'data-no': o.no },
     el('div', { class: 'oh' }, el('span', { class: 't-no', text: '#' + pad3(o.no) }),
       el('span', { class: 'sub', text: new Date(o.created_at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) + ' ' + timeStr(Date.parse(o.created_at)) }),
       el('span', { class: 'tag', style: 'margin-left:auto', text: o.type === 'delivery' ? 'Delivery' : 'Pickup' })),
     o.status === 'cancelled' ? el('div', { class: 'err', text: 'Cancelled' })
-      : el('div', {}, el('div', { class: 'steps' }, STEPS.map((s, i) => el('span', { class: i <= idx ? 'on' : '' }))),
+      : el('div', {}, el('div', { class: 'ostatus', text: statusLine(o) }),
+        el('div', { class: 'steps' }, STEPS.map((s, i) => el('span', { class: i <= idx ? 'on' : '' }))),
         el('div', { class: 'steplbl' }, STEPS.map((s, i) => i === idx ? el('b', { text: stepLabel(o, s) }) : el('span', { text: stepLabel(o, s) })))),
     when ? el('div', { class: 'when', text: '🕒 ' + when }) : null,
     el('ul', { class: 'lines' }, (o.items || []).map(it => el('li', {}, el('span', { text: `${it.qty}× ${it.name}${it.variant ? ' (' + it.variant + ')' : ''}` }), el('span', { text: money(num(it.price) * it.qty) }))),
       o.type === 'delivery' ? el('li', {}, el('span', { text: 'Delivery · ' + o.address }), el('span', { text: feeText(num(o.fee)) })) : null),
     el('div', { class: 'sumrow total' }, el('span', { text: 'Total' }), el('span', { text: money(o.total) })),
-    payBox(o));
+    payBox(o),
+    o.delivery_proof ? el('div', { class: 'proofbox' }, el('b', { text: o.type === 'delivery' ? 'Delivery photo' : 'Photo' }), privatePic(o.delivery_proof, 'Delivery photo')) : null,
+    S.msgsOff ? null : el('button', { class: 'link', type: 'button', style: 'align-self:flex-start', onclick: () => openChat(o.no) }, '💬 Message us about this order'));
 }
 function viewOrders(root) {
+  root.append(el('h1', { class: 'page-h', text: 'Orders' }));
   if (!S.session) {
     root.append(el('div', { class: 'empty' }, el('b', { text: 'No orders on this phone yet' }), 'Sign in to see orders you placed with your phone number or email.',
       el('div', { style: 'margin-top:12px' }, el('button', { class: 'btn primary', type: 'button', onclick: () => authSheet(() => render()) }, 'Sign in'))));
     return;
   }
-  if (!S.orders.length) { root.append(el('div', { class: 'empty' }, el('b', { text: 'No orders yet' }), el('button', { class: 'btn primary', type: 'button', onclick: () => go('menu') }, 'See the menu'))); }
-  for (const o of S.orders) root.append(orderCard(o));
-  const anon = S.session.user && S.session.user.is_anonymous;
-  root.append(el('p', { class: 'fineprint', style: 'margin-top:16px;text-align:center' },
-    anon ? 'You are ordering as a guest on this phone. ' : `Signed in as ${(S.session.user.email || '').replace('@' + CFG.phoneDomain, '')}. `,
-    el('button', { class: 'link', type: 'button', onclick: async () => { await sb.auth.signOut({ scope: 'local' }); S.session = null; S.orders = []; render(); } }, 'Sign out')));
+  if (!S.orders.length) { root.append(el('div', { class: 'empty' }, el('b', { text: 'No orders yet' }), el('button', { class: 'btn primary', type: 'button', onclick: () => go('menu') }, 'See the menu'))); return; }
+  const act = activeOrders(), past = S.orders.filter(o => !act.includes(o));
+  if (act.length) root.append(el('h2', { class: 'sect-h', text: 'Now' }), ...act.map(orderCard));
+  if (past.length) root.append(el('h2', { class: 'sect-h', text: 'Earlier' }), ...past.map(orderCard));
 }
+let ordersSig = '';
 async function loadOrders() {
   if (!sb || !S.session) return;
   try {
     const { data, error } = await sb.from('orders').select('*').eq('deleted', false).order('created_at', { ascending: false }).limit(50);
     if (error) throw error;
     S.orders = data || [];
-    if (S.view === 'orders' || S.view === 'done') { if (S.lastOrder) S.lastOrder = S.orders.find(o => o.id === S.lastOrder.id) || S.lastOrder; render(); } else renderTop();
+    if (S.lastOrder) S.lastOrder = S.orders.find(o => o.id === S.lastOrder.id) || S.lastOrder;
+    const sig = JSON.stringify(S.orders.map(o => [o.id, o.status, o.paid, o.pay_submitted_at, o.delivery_proof]));
+    const changed = sig !== ordersSig; ordersSig = sig;
+    if (S.view === 'orders' || S.view === 'done' || (changed && (S.view === 'menu' || S.view === 'me')) ) render(); else renderTop();
   } catch (_) { /* try again later */ }
+}
+/* ---------- messages: one conversation with the kitchen ---------- */
+async function loadMsgs() {
+  if (!sb || !S.session) { S.msgs = []; return; }
+  try {
+    const { data, error } = await sb.from('messages').select('*').order('created_at', { ascending: true }).limit(300);
+    if (error) { if (/messages|relation|schema cache/i.test(error.message || '')) S.msgsOff = true; return; }
+    S.msgsOff = false;
+    const before = S.msgs.length + ':' + unreadMsgs();
+    S.msgs = data || [];
+    if (S.view === 'chat') { drawChat(); if (unreadMsgs()) markRead(); }
+    else if (before !== S.msgs.length + ':' + unreadMsgs()) { if (S.view === 'me') render(); else renderTop(); }
+  } catch (_) { /* offline */ }
+}
+async function markRead() {
+  for (const m of S.msgs) if (m.from_admin && !m.read_at) m.read_at = new Date().toISOString();
+  renderTop();
+  try { await sb.rpc('mark_messages_read'); } catch (_) { /* next time */ }
+}
+function openChat(orderNo) {
+  if (!S.session) { authSheet(() => openChat(orderNo)); return; }
+  S.chatAbout = orderNo || null; go('chat'); loadMsgs();
+}
+const CH = { list: null };
+function drawChat() {
+  if (!CH.list) return;
+  let lastDay = '';
+  CH.list.replaceChildren(...S.msgs.flatMap(m => {
+    const t = Date.parse(m.created_at), d = dayLabel(isoDay(t)), out = [];
+    if (d !== lastDay) { lastDay = d; out.push(el('div', { class: 'chat-day', text: d })); }
+    out.push(el('div', { class: 'bubble ' + (m.from_admin ? 'them' : 'me') },
+      m.order_no ? el('span', { class: 'b-order', text: '#' + pad3(m.order_no) }) : null,
+      el('span', { class: 'b-text', text: m.body }), el('small', { text: timeStr(t) })));
+    return out;
+  }));
+  if (!S.msgs.length) CH.list.append(el('div', { class: 'fineprint', style: 'text-align:center;padding:24px 8px', text: `Ask ${S.biz.name || 'us'} anything: your order, delivery, spice level…` }));
+  requestAnimationFrame(() => window.scrollTo(0, document.body.scrollHeight));
+}
+function viewChat(root) {
+  const input = el('textarea', { id: 'chat-in', rows: 1, placeholder: 'Write a message…', maxlength: 1000 });
+  const about = el('div', { class: 'chat-about' });
+  const drawAbout = () => about.replaceChildren(...(S.chatAbout ? [el('span', { text: 'About order #' + pad3(S.chatAbout) }), el('button', { class: 'link', type: 'button', onclick: () => { S.chatAbout = null; drawAbout(); } }, 'remove')] : []));
+  async function send(e) {
+    const body = input.value.trim(); if (!body) return;
+    const btn = e && e.currentTarget && e.currentTarget.tagName === 'BUTTON' ? e.currentTarget : $('#chat-send'); btn.disabled = true;
+    try {
+      const { data, error } = await sb.from('messages').insert({ client_id: S.session.user.id, body, order_no: S.chatAbout }).select().single();
+      if (error) throw error;
+      S.msgs.push(data); input.value = ''; S.chatAbout = null; drawAbout(); drawChat();
+    } catch (x) { toast(niceErr(x), true); }
+    btn.disabled = false;
+  }
+  input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+  CH.list = el('div', { class: 'chat-list' });
+  root.append(el('div', { class: 'chat-top' }, el('button', { class: 'link', type: 'button', onclick: () => go('me') }, '‹ Back'), el('b', { text: S.biz.name || 'Messages' })),
+    CH.list,
+    el('div', { class: 'chat-bar' }, about, el('div', { class: 'chat-row' }, input, el('button', { class: 'btn primary', type: 'button', id: 'chat-send', onclick: send }, 'Send'))));
+  drawAbout(); drawChat(); if (unreadMsgs()) markRead();
 }
 let channel = null;
 function listen() {
-  try { if (channel) sb.removeChannel(channel); channel = sb.channel('shop-orders').on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => loadOrders()).subscribe(); } catch (_) { channel = null; }
+  try {
+    if (channel) sb.removeChannel(channel);
+    channel = sb.channel('shop-orders').on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => loadOrders())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, () => loadMsgs()).subscribe();
+  } catch (_) { channel = null; }
 }
 
 /* ---------- start ---------- */
@@ -490,7 +655,7 @@ async function loadShop() {
   try {
     const [st, mn] = await Promise.all([
       sb.from('settings').select('*').eq('id', 'business'),
-      sb.from('menu').select('id,name,category,description,variants,photo,available,windows').eq('deleted', false)]);
+      sb.from('menu').select('*').eq('deleted', false)]);
     if (st.error) throw st.error; if (mn.error) throw mn.error;
     const b = (st.data || [])[0] || {};
     S.biz = { name: b.name || '', currency: b.currency ?? '¥', addresses: Array.isArray(b.addresses) ? b.addresses : [],
@@ -506,8 +671,8 @@ async function boot() {
   if (!sb) { S.loadErr = 'Could not start. Check your internet and reload.'; render(); return; }
   await loadShop();
   try { const r = await sb.auth.getSession(); if (r && r.data && r.data.session) { await onSession(r.data.session); render(); } } catch (_) { /* signed out */ }
-  sb.auth.onAuthStateChange((ev, session) => { if (ev === 'SIGNED_OUT') { S.session = null; S.orders = []; setTimeout(render); } else if (session) S.session = session; });
+  sb.auth.onAuthStateChange((ev, session) => { if (ev === 'SIGNED_OUT') { S.session = null; S.orders = []; S.msgs = []; setTimeout(render); } else if (session) S.session = session; });
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { loadShop(); loadOrders(); } });
-  setInterval(() => { if (document.visibilityState === 'visible') loadOrders(); }, 20000);
+  setInterval(() => { if (document.visibilityState === 'visible') { loadOrders(); loadMsgs(); } }, 20000);
 }
 boot();
