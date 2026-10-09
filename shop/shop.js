@@ -11,7 +11,18 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   phoneDomain: 'phone.orderdesk.app', // phone logins are stored as <digits>@this, no SMS involved
 };
-const SHOP_VERSION = '1.8.0';
+const SHOP_VERSION = '1.9.0';
+/* phones (WeChat especially) keep old copies of web pages; if a newer shop is online, reload it */
+(async function freshness() {
+  try {
+    const r = await fetch('version.json?t=' + Date.now(), { cache: 'no-store' });
+    const v = (await r.json()).shop;
+    if (v && v !== SHOP_VERSION) {
+      const k = 'shop-reloaded-' + v;
+      if (!sessionStorage.getItem(k)) { sessionStorage.setItem(k, '1'); const u = new URL(location.href); u.searchParams.set('v', v); location.replace(u.toString()); }
+    }
+  } catch (_) { /* offline or blocked: keep going */ }
+})();
 
 /* ---------- helpers ---------- */
 function el(tag, props, ...kids) {
@@ -126,7 +137,8 @@ const Sound = (() => {
     try { if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)(); if (ctx.state === 'suspended') ctx.resume(); } catch (_) { ctx = null; }
   }
   ['pointerdown', 'keydown', 'touchstart'].forEach(ev => document.addEventListener(ev, unlock, { passive: true }));
-  function tone(freq, start, dur, type = 'sine', vol = 0.25) {
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && ctx && ctx.state === 'suspended') { try { ctx.resume(); } catch (_) { /* needs a tap */ } } });
+  function tone(freq, start, dur, type = 'sine', vol = 0.6) {
     const o = ctx.createOscillator(), g = ctx.createGain();
     o.type = type; o.frequency.value = freq;
     g.gain.setValueAtTime(0.0001, ctx.currentTime + start);
@@ -220,7 +232,7 @@ function renderTop() {
 function whoAmI() {
   const u = S.session && S.session.user;
   if (!u) return null;
-  if (u.is_anonymous) return { kind: 'Guest', id: S.profile && S.profile.name ? S.profile.name : 'Guest on this phone' };
+  if (u.is_anonymous) return { kind: 'Guest', id: S.profile && S.profile.name ? `${S.profile.name} (Guest)` : 'Guest' };
   const e = u.email || '';
   return e.endsWith('@' + CFG.phoneDomain) ? { kind: 'Phone', id: e.replace('@' + CFG.phoneDomain, '') } : { kind: 'Email', id: e };
 }
@@ -238,7 +250,8 @@ function viewMe(root) {
   root.append(
     el('div', { class: 'box' }, el('div', { class: 'acct-card' + (S.profile && S.profile.photo ? ' has-pic' : '') },
         S.profile && S.profile.photo ? el('img', { class: 'me-pic', src: publicUrl(S.profile.photo), alt: '' }) : null,
-        el('div', {}, el('span', { class: 'acct-kind', text: me.kind === 'Guest' ? 'Guest · this phone' : me.kind }), el('b', { id: 'me-id', text: me.id }))),
+        el('div', { class: 'acct-txt' }, el('b', { id: 'me-id', text: me.kind === 'Guest' ? me.id : ((S.profile && S.profile.name) || me.id) }),
+          me.kind !== 'Guest' ? el('small', { text: me.id }) : null)),
       me.kind === 'Guest' ? el('p', { class: 'fineprint', text: 'Guest orders are saved on this phone only. Create a phone or email account to see your orders on any phone.' }) : null,
       el('div', { class: 'btnrow' },
         me.kind === 'Guest' ? el('button', { class: 'btn', type: 'button', onclick: () => authSheet(() => render()) }, 'Use phone or email') : null,
@@ -523,17 +536,18 @@ function viewCheckout(root) {
       d.type === 'delivery' ? el('div', { class: 'field' }, el('label', { for: 'c-addr', text: 'Delivery address' }),
         el('select', { id: 'c-addr', onchange: e => { d.address = e.target.value; render(); } },
           el('option', { value: '', text: 'Choose your address…' }),
-          (S.biz.addresses || []).map(a => el('option', { value: a.name, selected: a.name === d.address, text: `${a.name} — ${feeText(feeOf(a, basketPizza()))}` })))) : null,
+          (S.biz.addresses || []).map(a => el('option', { value: a.name, selected: a.name === d.address, text: `${a.name}${feeOf(a, basketPizza()) ? ' · delivery fee' : ' · free delivery'}` })))) : null,
       el('div', { class: 'field' }, el('label', { text: d.type === 'delivery' ? 'Delivery time' : 'Pickup time' }),
         el('div', { class: list.length ? 'two' : '' },
           el('select', { id: 'c-day', 'aria-label': 'Day', onchange: e => { d.slotDate = e.target.value; render(); } }, dates.map(x => el('option', { value: x, selected: x === d.slotDate, text: dayLabel(x) }))),
           list.length ? el('select', { id: 'c-slot', 'aria-label': 'Time', onchange: e => { d.slot = e.target.value; } },
-            el('option', { value: '', text: 'Choose a time…', disabled: true, selected: !d.slot }), list.map(x => el('option', { value: x, selected: x === d.slot, text: x }))) : null),
+            el('option', { value: '', text: 'Choose time', disabled: true, selected: !d.slot }), list.map(x => el('option', { value: x, selected: x === d.slot, text: x }))) : null),
         all.length && !todayOpen.length ? el('div', { class: 'fineprint', id: 'c-tomorrow', text: 'Today\'s times have passed, so the earliest is tomorrow.' }) : null,
         clash ? el('div', { class: 'err', text: 'These dishes are served at different times. Please order them separately.' }) : null)),
     el('div', { class: 'box' }, el('h2', {}, el('span', { class: 'stepn', text: '3' }), 'Your details'),
-      fld('c-name', 'Name', 'name', { autocomplete: 'nickname', placeholder: 'Your WeChat name', maxlength: 80 }),
-      el('div', { class: 'fineprint', style: 'margin-top:-6px', text: 'Preferably your WeChat name: it makes it easy to track and deliver your parcel correctly.' }),
+      fld('c-name', 'Name', 'name', Object.assign({ autocomplete: 'nickname', placeholder: 'Your WeChat name', maxlength: 80 }, isLinked() ? { readonly: true } : {})),
+      isLinked() ? el('div', { class: 'fineprint', style: 'margin-top:-6px', text: `${S.biz.name || 'The kitchen'} knows you by this name.` }) : null,
+      isLinked() ? null : el('div', { class: 'fineprint', style: 'margin-top:-6px', text: 'Preferably your WeChat name: it makes it easy to track and deliver your parcel correctly.' }),
       fld('c-phone', 'Phone (optional)', 'phone', { type: 'tel', inputmode: 'tel', autocomplete: 'tel', placeholder: 'Optional' }),
       el('div', { class: 'field' }, el('label', { for: 'c-note', text: 'Note for the kitchen (optional)' }),
         el('textarea', { id: 'c-note', value: d.note || '', placeholder: 'Less spicy, extra raita…', oninput: e => { d.note = e.target.value; store.set('draft', d); } }))),
@@ -561,7 +575,7 @@ async function placeOrder(err) {
     if (error) throw error;
     S.lastOrder = data; S.basket = []; d.note = ''; saveBasket();
     S.orders = [data, ...S.orders.filter(o => o.id !== data.id)];
-    if (!S.profile) S.profile = { name: data.customer_name }; else if (!S.profile.photo) S.profile.name = data.customer_name;
+    if (!S.profile) S.profile = { name: data.customer_name, notes: 'Signed up in the shop' }; else S.profile.name = data.customer_name;
     lastStatus.set(data.id, data.status);
     Sound.play('placed');
     go('done');
@@ -616,15 +630,28 @@ function authSheet(after) {
   }
   draw(); openModal(sheet);
 }
+async function refreshProfile() {
+  try {
+    const { data } = await sb.from('customers').select('name,phone,address,photo,notes').limit(1);
+    if (data && data[0]) { S.profile = data[0]; if (isLinked()) { S.draft.name = data[0].name || S.draft.name; store.set('draft', S.draft); } }
+  } catch (_) { /* fine */ }
+}
+const isLinked = () => !!(S.profile && S.profile.notes !== undefined && S.profile.notes !== 'Signed up in the shop');
 async function onSession(session) {
   S.session = session || null;
   if (!session) { S.orders = []; return; }
   // fill in name / phone / address from the profile the shop keeps for this account
   try {
-    const { data } = await sb.from('customers').select('name,phone,address,photo').limit(1);
+    const { data } = await sb.from('customers').select('name,phone,address,photo,notes').limit(1);
     const p = data && data[0];
     S.profile = p || null;
-    if (p) { if (!S.draft.name) S.draft.name = p.name || ''; if (!S.draft.phone) S.draft.phone = p.phone || ''; if (!S.draft.address && addrFee(p.address) !== null) S.draft.address = p.address; }
+    if (p) {
+      // the account's name fills the order; a name set by the kitchen (Link) always wins
+      if (isLinked() || !S.draft.name) S.draft.name = p.name || '';
+      if (!S.draft.phone) S.draft.phone = p.phone || '';
+      if (!S.draft.address && addrFee(p.address) !== null) S.draft.address = p.address;
+      store.set('draft', S.draft);
+    }
   } catch (_) { /* fine */ }
   listen(); loadOrders(); loadMsgs();
 }
@@ -826,7 +853,8 @@ async function loadOrders() {
     }
     if (tune) { Sound.play(tune); toast(msg); }
     if (S.lastOrder) S.lastOrder = S.orders.find(o => o.id === S.lastOrder.id) || S.lastOrder;
-    const sig = JSON.stringify(S.orders.map(o => [o.id, o.status, o.paid, o.pay_submitted_at, o.delivery_proof]));
+    const sig = JSON.stringify(S.orders.map(o => [o.id, o.status, o.paid, o.pay_submitted_at, o.delivery_proof, o.customer_name]));
+    if (S.orders[0] && S.profile && S.orders[0].customer_name && S.orders[0].customer_name !== S.profile.name) refreshProfile();
     const changed = sig !== ordersSig; ordersSig = sig;
     if (S.view === 'orders' || S.view === 'done' || (changed && (S.view === 'menu' || S.view === 'me')) ) render(); else renderTop();
   } catch (_) { /* try again later */ }

@@ -9,7 +9,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   bucket: 'photos',
 };
-const VERSION = '2.8.0';
+const VERSION = '2.8.1';
 const COLLS = ['menu', 'customers', 'orders', 'settings', 'purchases'];
 const DEFAULT_SETTINGS = { id: 'main', name: 'My kitchen', currency: '¥', deliveryFee: 0, addresses: [], wechatQr: '', alipayQr: '', wechatId: '', alipayId: '', pickup: true, inventory: {} };
 
@@ -167,7 +167,8 @@ const Sound = (() => {
     try { if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)(); if (ctx.state === 'suspended') ctx.resume(); } catch (_) { ctx = null; }
   }
   ['pointerdown', 'keydown', 'touchstart'].forEach(ev => document.addEventListener(ev, unlock, { passive: true }));
-  function tone(freq, start, dur, type = 'sine', vol = 0.25) {
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && ctx && ctx.state === 'suspended') { try { ctx.resume(); } catch (_) { /* needs a tap */ } } });
+  function tone(freq, start, dur, type = 'sine', vol = 0.6) {
     const o = ctx.createOscillator(), g = ctx.createGain();
     o.type = type; o.frequency.value = freq;
     g.gain.setValueAtTime(0.0001, ctx.currentTime + start);

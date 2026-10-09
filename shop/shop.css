@@ -251,3 +251,15 @@ body.shop[data-view="chat"]{padding-bottom:calc(90px + env(safe-area-inset-botto
 /* 1.8: profile photo */
 .acct-card.has-pic{flex-direction:row;align-items:center;gap:12px}
 .me-pic{width:52px;height:52px;border-radius:50%;object-fit:cover;flex:none}
+/* 1.9: who is ordering */
+.acct-line{display:flex;align-items:center;gap:10px;background:var(--surface);border-radius:12px;padding:8px 10px}
+.acct-line span:nth-child(2){flex:1;display:flex;flex-direction:column;min-width:0}
+.acct-line small{color:var(--muted);font-size:11.5px}
+.acct-line .acct-kind{font-size:11px}
+.acct-ic{width:34px;height:34px;border-radius:50%;background:var(--surface2);display:grid;place-items:center;flex:none}
+.me-pic.sm{width:34px;height:34px}
+input[readonly]{background:var(--surface2)!important;color:var(--muted)}
+.acct-card{display:flex;flex-direction:row;align-items:center;gap:12px}
+.acct-txt{display:flex;flex-direction:column;min-width:0}
+.acct-txt b{font-family:var(--font-body);font-size:17px;font-weight:700;overflow-wrap:anywhere}
+.acct-txt small{color:var(--muted);font-size:13px}
