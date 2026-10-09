@@ -9,7 +9,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   bucket: 'photos',
 };
-const VERSION = '2.3.1';
+const VERSION = '2.4.0';
 const COLLS = ['menu', 'customers', 'orders', 'settings', 'purchases'];
 const DEFAULT_SETTINGS = { id: 'main', name: 'My kitchen', currency: '¥', deliveryFee: 0, addresses: [], wechatQr: '', alipayQr: '', wechatId: '', alipayId: '' };
 
@@ -118,7 +118,7 @@ const S = {
   menu: [], customers: [], orders: [], purchases: [], settings: clone(DEFAULT_SETTINGS),
   loaded: { menu: true, customers: true, orders: true, config: true },
   view: 'orders', statMode: 'days', statPick: null, ordFilter: 'all', ordLimit: 60, menuQ: '', menuCat: 'All', custQ: '', pickQ: '', pickCat: 'All',
-  draft: null, blobUrls: new Map(), outbox: new Map(), svc: 'all', msgs: [], msgsOff: false,
+  draft: null, blobUrls: new Map(), outbox: new Map(), svc: 'all', msgs: [], msgsOff: false, reviews: [], reviewsOff: false,
 };
 function refreshArrays(colls) {
   for (const c of colls || COLLS) {
@@ -189,9 +189,11 @@ const MAP = {
   menu: {
     to: r => Object.assign({ id: r.id, name: r.name || '', category: r.category || 'Other', description: r.description || '', variants: r.variants || [], photo: r.photo || '', available: r.available !== false, example: !!r.example, deleted: !!r.deleted },
       r.winTouched ? { windows: r.windows || [] } : {},
-      r.svcTouched ? { service: r.service === 'night' ? 'night' : 'day' } : {}),
+      r.svcTouched ? { service: r.service === 'night' ? 'night' : 'day' } : {},
+      r.ingTouched ? { ingredients: r.ingredients || [] } : {}),
     from: x => ({ id: x.id, name: x.name, category: x.category, description: x.description, variants: x.variants || [], photo: x.photo || '', available: x.available !== false, example: !!x.example, deleted: !!x.deleted,
-      windows: Array.isArray(x.windows) ? x.windows : [], winTouched: x.windows !== undefined, service: x.service === 'night' ? 'night' : 'day', svcTouched: x.service !== undefined }),
+      windows: Array.isArray(x.windows) ? x.windows : [], winTouched: x.windows !== undefined, service: x.service === 'night' ? 'night' : 'day', svcTouched: x.service !== undefined,
+      ingredients: Array.isArray(x.ingredients) ? x.ingredients : [], ingTouched: x.ingredients !== undefined }),
   },
   customers: {
     // photo is only sent when there is one, so this works even before the photo column exists
@@ -242,7 +244,7 @@ const Sync = {
       await pull();
       if (photoErr) throw photoErr;
       this.lastOk = Date.now(); this.fails = 0; this.set('ok');
-      loadMsgsSoon(0);
+      loadMsgsSoon(0); loadReviewsSoon(0);
       if (!channel) startRealtime();
     } catch (e) {
       this.fails++;
@@ -346,6 +348,7 @@ function startRealtime() {
     channel = sb.channel('od-' + S.uid);
     for (const t of COLLS) channel.on('postgres_changes', { event: '*', schema: 'public', table: t }, () => Sync.soon(250)); // whole team's changes
     channel.on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, () => loadMsgsSoon(150));
+    channel.on('postgres_changes', { event: '*', schema: 'public', table: 'reviews' }, () => loadReviewsSoon(500));
     channel.subscribe();
   } catch (_) { channel = null; }
 }
@@ -515,9 +518,6 @@ function banners(root) {
     el('button', { class: 'btn small primary', type: 'button', onclick: applyUpdate }, 'Update now')));
   if (showInstallHint()) root.append(el('div', { class: 'banner slim' }, el('span', { text: 'Install: tap Share, then "Add to Home Screen".' }),
     el('button', { class: 'x', type: 'button', 'aria-label': 'Hide', onclick: () => { try { localStorage.setItem('od-hint', '1'); } catch (_) { /* ignore */ } render(true); } }, '✕')));
-  const days = backupAgeDays();
-  if (S.orders.length >= 10 && days >= 7) root.append(el('div', { class: 'banner' }, el('span', { text: days === Infinity ? 'You have not saved a backup file yet.' : `Last backup file was ${days} days ago.` }),
-    el('button', { class: 'btn small', type: 'button', onclick: saveBackup }, 'Back up now')));
 }
 function icon(paths) {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -538,18 +538,20 @@ function viewOrders(root) {
   const paidN = S.orders.filter(o => !isCancelled(o) && o.paid).length;
   const unpaidN = S.orders.filter(isUnpaid).length;
   const cancN = S.orders.filter(isCancelled).length;
-  const filters = [['all', 'All'], ['paid', `Paid (${paidN})`], ['unpaid', `Unpaid (${unpaidN})`], ['cancelled', `Cancelled (${cancN})`]];
+  const isDone = o => !isCancelled(o) && o.status === 'done';
+  const doneN = S.orders.filter(isDone).length;
+  const filters = [['all', 'All'], ['paid', `Paid (${paidN})`], ['unpaid', `Unpaid (${unpaidN})`], ['done', `Completed (${doneN})`], ['cancelled', `Cancelled (${cancN})`]];
   if (!filters.some(([k]) => k === S.ordFilter)) S.ordFilter = 'all';
   root.append(el('div', { class: 'chips' }, filters.map(([k, label]) =>
     el('button', { class: 'chip', type: 'button', 'aria-pressed': S.ordFilter === k, onclick: () => { S.ordFilter = k; S.ordLimit = 60; render(true); } }, label))));
   if (hasNight()) {
     const active = o => !isCancelled(o) && o.status !== 'done';
     const cnt = k => S.orders.filter(o => active(o) && (k === 'all' || orderSvc(o) === k)).length;
-    root.append(el('div', { class: 'svc-tiles', role: 'group', 'aria-label': 'Day or night orders' }, [['all', 'All'], ['day', SVC.day], ['night', SVC.night]].map(([k, l]) =>
-      el('button', { type: 'button', class: 'svc-tile ' + k, id: 'svc-' + k, 'aria-pressed': S.svc === k, onclick: () => { S.svc = k; S.ordLimit = 60; render(true); } },
-        el('b', { text: cnt(k) }), el('span', { text: l }), el('small', { text: 'open' })))));
+    root.append(el('div', { class: 'svc-seg', role: 'group', 'aria-label': 'Day or night orders' }, [['all', 'All'], ['day', SVC.day], ['night', SVC.night]].map(([k, l]) =>
+      el('button', { type: 'button', class: 'svc-btn ' + k, id: 'svc-' + k, 'aria-pressed': S.svc === k, title: 'Open orders', onclick: () => { S.svc = k; S.ordLimit = 60; render(true); } },
+        el('span', { text: l }), el('b', { text: cnt(k) })))));
   } else S.svc = 'all';
-  const keep0 = { all: () => true, paid: o => !isCancelled(o) && o.paid, unpaid: isUnpaid, cancelled: isCancelled }[S.ordFilter];
+  const keep0 = { all: () => true, paid: o => !isCancelled(o) && o.paid, unpaid: isUnpaid, done: isDone, cancelled: isCancelled }[S.ordFilter];
   const keep = o => keep0(o) && (S.svc === 'all' || orderSvc(o) === S.svc);
   const list = S.orders.filter(keep).sort((a, b) => b.createdAt - a.createdAt);
   if (!list.length) {
@@ -1029,7 +1031,9 @@ function menuResults(root) {
     root.append(el('h2', { class: 'cat-title' }, c, el('span', { text: arr.length + (arr.length === 1 ? ' dish' : ' dishes') })));
     root.append(el('div', { class: 'mlist' }, arr.map(m => el('div', { class: 'mrow' + (m.available === false ? ' off' : '') },
       thumb(m, ''),
-      el('div', {}, el('div', { class: 'nm', text: m.name + (m.service === 'night' ? ' 🌙' : '') }),
+      el('div', {}, el('div', { class: 'nm', text: m.name + (m.service === 'night' ? ' 🌙' : ' ☀') }),
+        dishRating(m.id) ? el('div', { class: 'pr', text: dishRating(m.id) }) : null,
+        (m.ingredients || []).length ? el('div', { class: 'pr', text: '🧂 ' + m.ingredients.map(g => g.item).join(', ') }) : null,
         el('div', { class: 'pr', text: (m.variants || []).map(v => (v.label ? v.label + ' ' : '') + money(v.price)).join(' · ') }),
         (m.windows || []).length ? el('div', { class: 'pr', text: '🕒 ' + m.windows.map(winLabel).join(', ') }) : null),
       el('div', { class: 'ctl' },
@@ -1057,6 +1061,19 @@ function menuModal(item) {
   const oldPhoto = m.photo || '';
   m.windows = Array.isArray(m.windows) ? clone(m.windows) : [];
   m.service = m.service === 'night' ? 'night' : 'day';
+  m.ingredients = Array.isArray(m.ingredients) ? clone(m.ingredients) : [];
+  const inv = stockList();
+  const ibox = el('div', { class: 'ing-list' });
+  const drawIng = () => ibox.replaceChildren(...m.ingredients.map((g, i) => {
+    const unit = (inv.find(x => x.key === ingKey(g.item)) || {}).unit || '';
+    return el('div', { class: 'ing-row' },
+      el('input', { value: g.item, list: 'inv-items', placeholder: 'Ingredient', 'aria-label': 'Ingredient', oninput: e => { g.item = e.target.value; } }),
+      el('input', { type: 'number', inputmode: 'decimal', min: '0', step: 'any', value: g.qty, 'aria-label': 'Amount per dish', oninput: e => { g.qty = e.target.value; } }),
+      el('span', { class: 'ing-unit', text: unit || '×' }),
+      el('button', { class: 'x', type: 'button', 'aria-label': 'Remove ingredient', onclick: () => { m.ingredients.splice(i, 1); drawIng(); } }, '✕'));
+  }), ...(m.ingredients.length ? [] : [el('div', { class: 'sub', text: 'No ingredients yet.' })]));
+  drawIng();
+  const invDl = el('datalist', { id: 'inv-items' }, inv.map(x => el('option', { value: x.name })));
   const svcSeg = el('div', { class: 'seg', role: 'group', 'aria-label': 'Day or night' });
   const drawSvc = () => svcSeg.replaceChildren(...[['day', SVC.day], ['night', SVC.night]].map(([k, l]) =>
     el('button', { type: 'button', id: 'f-svc-' + k, 'aria-pressed': m.service === k, onclick: () => { m.service = k; drawSvc(); } }, l)));
@@ -1111,6 +1128,8 @@ function menuModal(item) {
     if (windows.some(w => w.from >= w.to)) return toast('A time window ends before it starts.', true);
     const rec = { id: item ? item.id : newId(), name, category: (m.category || '').trim() || 'Other', description: (m.description || '').trim(), variants, photo, available: m.available !== false, example: false,
       windows, winTouched: !!(windows.length || (item && item.winTouched)),
+      ingredients: m.ingredients.map(g => ({ item: (g.item || '').trim(), qty: g.qty === '' || g.qty == null ? 1 : Math.max(0, Number(g.qty) || 0) })).filter(g => g.item),
+      ingTouched: !!(m.ingredients.length || (item && item.ingTouched)),
       service: m.service, svcTouched: !!(m.service === 'night' || (item && item.svcTouched)) };
     if (await write(Store.put('menu', rec, extra), 'Saved')) closeModal();
   }
@@ -1124,9 +1143,13 @@ function menuModal(item) {
       el('button', { class: 'link', type: 'button', style: 'margin-top:8px', onclick: () => { m.variants.push({ label: '', price: '' }); drawVariants(); } }, '+ Add another size')),
     el('div', {}, el('div', { class: 'sub', style: 'margin-bottom:6px', text: 'Time windows (optional). When this dish can be delivered or picked up, e.g. 12:00 to 14:00. Leave empty for any time.' }), wbox,
       el('button', { class: 'link', type: 'button', style: 'margin-top:8px', onclick: () => { m.windows.push({ from: '12:00', to: '14:00' }); drawWins(); } }, '+ Add time window')),
+    el('div', {}, el('div', { class: 'sub', style: 'margin-bottom:6px', text: 'Ingredients (from your inventory). Customers see them, and each delivered dish takes them out of stock. Amount = per one dish.' }),
+      ibox, invDl, el('button', { class: 'link', type: 'button', style: 'margin-top:8px', id: 'f-ing-add', onclick: () => { m.ingredients.push({ item: '', qty: 1 }); drawIng(); const ins = ibox.querySelectorAll('.ing-row input:not([type=number])'); if (ins.length) ins[ins.length - 1].focus(); } }, '+ Add ingredient'),
+      inv.length ? null : el('div', { class: 'sub', text: 'Tip: add purchases in Inventory and their names show up here.' })),
     el('div', { class: 'field' }, el('label', { text: 'Sold during' }), svcSeg,
       el('div', { class: 'sub', text: 'Day and night dishes are ordered separately, and orders are split into Day / Night.' })),
     el('label', { class: 'switch' }, el('input', { type: 'checkbox', checked: m.available !== false, onchange: e => { m.available = e.target.checked; } }), 'Available today'),
+    item ? reviewsBox(item.id) : null,
     el('div', { class: 'actions' },
       item ? confirmBtn('Delete dish', 'Delete for good?', async () => { if (await write(Store.remove('menu', item.id, photoDelOp(oldPhoto)), 'Dish deleted')) closeModal(); }, 'danger left') : null,
       el('button', { class: 'btn', type: 'button', onclick: closeModal }, 'Cancel'),
@@ -1134,6 +1157,57 @@ function menuModal(item) {
   openModal(sheet);
 }
 
+/* ---------- STOCK: bought (Inventory) minus used (delivered orders x dish ingredients) ---------- */
+const ingKey = n => String(n || '').trim().toLowerCase();
+function stockList() {
+  const by = new Map();
+  const get = name => { const k = ingKey(name); if (!by.has(k)) by.set(k, { key: k, name: String(name).trim(), unit: '', bought: 0, used: 0, last: 0 }); return by.get(k); };
+  for (const p of S.purchases) { if (!p.item) continue; const r = get(p.item); r.bought += num(p.qty); const t = p.createdAt || 0; if (t >= r.last) { r.last = t; r.unit = p.unit || r.unit; r.name = p.item.trim(); } }
+  for (const o of S.orders) {
+    if (isCancelled(o) || o.status !== 'done') continue;
+    for (const it of o.items || []) {
+      const m = M.menu.get(it.menuId); if (!m || m.deleted) continue;
+      for (const g of m.ingredients || []) if (g.item) get(g.item).used += num(g.qty) * num(it.qty);
+    }
+  }
+  return [...by.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+const qtyText = n => (Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/0+$/, '').replace(/\.$/, ''));
+/* ---------- REVIEWS (needs internet) ---------- */
+let revTimer = 0;
+function loadReviewsSoon(ms) { clearTimeout(revTimer); revTimer = setTimeout(loadReviews, ms == null ? 300 : ms); }
+async function loadReviews() {
+  if (!sb || !S.signedIn || S.notAdmin) return;
+  try {
+    const { data, error } = await sb.from('reviews').select('*').order('created_at', { ascending: false }).limit(1000);
+    if (error) { S.reviewsOff = true; return; }
+    S.reviewsOff = false; S.reviews = data || []; scheduleRender();
+  } catch (_) { /* offline */ }
+}
+const reviewsOf = id => (S.reviews || []).filter(r => (r.dish_ids || []).includes(id));
+function dishRating(id) {
+  const rs = reviewsOf(id).filter(r => !r.hidden); if (!rs.length) return '';
+  return `★ ${(rs.reduce((a, r) => a + r.stars, 0) / rs.length).toFixed(1)} (${rs.length})`;
+}
+const starStr = n => '★★★★★'.slice(0, n) + '☆☆☆☆☆'.slice(0, 5 - n);
+function reviewsBox(dishId) {
+  const box = el('div', { class: 'rev-box' });
+  const draw = () => {
+    const rs = reviewsOf(dishId);
+    box.replaceChildren(el('div', { class: 'sub', style: 'margin-bottom:6px', text: rs.length ? `Reviews · ${dishRating(dishId) || 'all hidden'}` : 'No reviews yet.' }),
+      ...rs.map(r => el('div', { class: 'rev' + (r.hidden ? ' hidden' : '') },
+        el('div', { class: 'rev-h' }, el('span', { class: 'stars', text: starStr(r.stars) }), el('b', { text: r.customer_name || 'Customer' }), el('small', { text: dateShort(Date.parse(r.created_at)) }),
+          el('button', { class: 'link', type: 'button', onclick: async () => {
+            const hidden = !r.hidden;
+            try { const { error } = await sb.from('reviews').update({ hidden }).eq('id', r.id); if (error) throw error; r.hidden = hidden; draw(); toast(hidden ? 'Review hidden' : 'Review shown'); }
+            catch (e) { toast('Could not change it: ' + ((e && e.message) || 'no internet?'), true); }
+          } }, r.hidden ? 'Show' : 'Hide')),
+        r.body ? el('div', { text: r.body }) : null,
+        r.photo ? el('img', { class: 'rev-img', src: photoUrl(r.photo), alt: 'Review photo', loading: 'lazy' }) : null)));
+  };
+  draw();
+  return box;
+}
 /* ---------- MESSAGES (one conversation per customer; needs internet) ---------- */
 let msgTimer = 0, chatOpen = null;
 function loadMsgsSoon(ms) { clearTimeout(msgTimer); msgTimer = setTimeout(loadMsgs, ms == null ? 300 : ms); }
@@ -1301,6 +1375,12 @@ function viewInventory(root) {
   root.append(pageHead('Inventory', 'What you bought, when, and for how much.',
     el('button', { class: 'btn primary', type: 'button', onclick: () => purchaseModal(null) }, '+ Add', el('span', { class: 'hide-m', text: ' purchase' }))));
   const list = S.purchases.slice().sort((a, b) => (b.day || '').localeCompare(a.day || '') || (b.createdAt || 0) - (a.createdAt || 0));
+  const stock = stockList();
+  if (stock.length) root.append(el('div', { class: 'card stock' }, el('h2', { text: 'Stock' }),
+    el('div', { class: 'sub', text: 'Bought minus what delivered orders used (from each dish\'s ingredients).' }),
+    el('div', { class: 'stock-list' }, stock.map(r => { const left = r.bought - r.used; return el('div', { class: 'stock-row' + (left <= 0 && r.used ? ' out' : '') },
+      el('span', { class: 'nm', text: r.name }), el('small', { text: `bought ${qtyText(r.bought)} · used ${qtyText(r.used)}` }),
+      el('b', { text: `${qtyText(left)} ${r.unit}`.trim() })); }))));
   if (!list.length) { root.append(el('div', { class: 'empty' }, el('b', { text: 'No purchases yet' }), 'Add what you buy (meat, flour, gas…) with the cost and a photo of the receipt.')); return; }
   const thisMonth = monthKey(isoDay(Date.now()));
   const mSpent = list.filter(p => monthKey(p.day) === thisMonth).reduce((a, p) => a + num(p.cost), 0);

@@ -11,7 +11,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   phoneDomain: 'phone.orderdesk.app', // phone logins are stored as <digits>@this, no SMS involved
 };
-const SHOP_VERSION = '1.3.0';
+const SHOP_VERSION = '1.4.0';
 
 /* ---------- helpers ---------- */
 function el(tag, props, ...kids) {
@@ -64,7 +64,7 @@ const S = {
   basket: store.get('basket', []), // [{menuId, variant, qty}]
   draft: Object.assign({ type: 'delivery', address: '', slotDate: '', slot: '', note: '', name: '', phone: '' }, store.get('draft', {})),
   session: null, orders: [], lastOrder: null, loaded: false, loadErr: '',
-  svc: store.get('svc', new Date().getHours() >= 16 ? 'night' : 'day'), msgs: [], msgsOff: false, chatAbout: null,
+  msgs: [], msgsOff: false, chatAbout: null, reviews: [], reviewsOff: false,
 };
 const money = n => { n = Number(n) || 0; const a = Math.abs(n); return (n < 0 ? '−' : '') + (S.biz.currency || '') + (Number.isInteger(a) ? a : a.toFixed(2)); };
 const feeText = f => (f ? money(f) : 'Free');
@@ -166,6 +166,82 @@ function render() {
 function basketCount() { return S.basket.reduce((a, l) => a + l.qty, 0); }
 function basketTotal() { return S.basket.reduce((a, l) => { const m = dish(l.menuId); return a + (m ? priceOf(m, l.variant) * l.qty : 0); }, 0); }
 const svcOf = m => (m && m.service === 'night' ? 'night' : 'day');
+const hasNight = () => S.menu.some(m => !m.deleted && svcOf(m) === 'night');
+/* ---------- reviews ---------- */
+const reviewsOf = id => S.reviews.filter(r => !r.hidden && (r.dish_ids || []).includes(id));
+function ratingOf(id) { const rs = reviewsOf(id); return rs.length ? { avg: (rs.reduce((a, r) => a + r.stars, 0) / rs.length).toFixed(1), n: rs.length } : null; }
+const starStr = n => '★★★★★'.slice(0, n) + '☆☆☆☆☆'.slice(0, 5 - n);
+async function loadReviews() {
+  try {
+    const { data, error } = await sb.from('reviews').select('*').order('created_at', { ascending: false }).limit(500);
+    if (error) { S.reviewsOff = true; return; }
+    S.reviewsOff = false; S.reviews = data || [];
+  } catch (_) { /* offline */ }
+}
+function reviewEl(r) {
+  return el('div', { class: 'rev' },
+    el('div', { class: 'rev-h' }, el('span', { class: 'stars', text: starStr(r.stars) }), el('b', { text: r.customer_name || 'Customer' }), el('small', { text: dayLabel(isoDay(Date.parse(r.created_at))) })),
+    r.body ? el('div', { class: 'rev-t', text: r.body }) : null,
+    r.photo ? el('img', { class: 'rev-img', src: publicUrl(r.photo), alt: 'Photo from a customer', loading: 'lazy' }) : null);
+}
+/* the dish, full screen: photo, details, ingredients, reviews */
+function dishSheet(m) {
+  const vs = (m.variants || []).map(v => num(v.price)), lo = Math.min(...vs), hi = Math.max(...vs);
+  const rs = reviewsOf(m.id), r = ratingOf(m.id);
+  const pic = m.photo ? el('img', { class: 'ds-img', src: publicUrl(m.photo), alt: m.name }) : el('div', { class: 'ds-img ph', style: '--h:' + hue(m.name), text: initial(m.name) });
+  openModal(el('div', { class: 'sheet dsheet' },
+    el('button', { class: 'ds-x', type: 'button', 'aria-label': 'Close', onclick: closeModal }, '✕'),
+    pic,
+    el('div', { class: 'ds-body' },
+      el('div', { class: 'ds-top' }, el('h2', { text: m.name }),
+        hasNight() ? el('span', { class: 'svc-pill ' + svcOf(m), text: svcOf(m) === 'night' ? '🌙 Night' : '☀ Day' }) : null),
+      r ? el('div', { class: 'rating big' }, el('span', { class: 'stars', text: starStr(Math.round(r.avg)) }), ` ${r.avg} · ${r.n} review${r.n === 1 ? '' : 's'}`) : null,
+      el('div', { class: 'ds-price', text: vs.length ? (lo === hi ? money(lo) : `${money(lo)} – ${money(hi)}`) : '' }),
+      m.description ? el('p', { class: 'ds-desc', text: m.description }) : null,
+      (m.windows || []).length ? el('div', { class: 'win', text: '🕒 ' + m.windows.map(winLabel).join(', ') }) : null,
+      (m.ingredients || []).length ? el('section', { class: 'ds-sect' }, el('h3', { text: 'Ingredients' }),
+        el('div', { class: 'ing-chips' }, m.ingredients.map(g => el('span', { class: 'ing-chip', text: g.item })))) : null,
+      el('section', { class: 'ds-sect' }, el('h3', { text: rs.length ? `Reviews (${rs.length})` : 'Reviews' }),
+        rs.length ? rs.slice(0, 30).map(reviewEl) : el('div', { class: 'fineprint', text: 'No reviews yet. Be the first after your order arrives.' }))),
+    el('div', { class: 'ds-foot' }, m.available === false ? el('div', { class: 'fineprint', text: 'Sold out today' })
+      : el('button', { class: 'btn primary big-btn', type: 'button', id: 'ds-add', onclick: () => { closeModal(); addDish(m); } }, `Add to basket · ${vs.length ? money(lo) : ''}${lo !== hi ? '+' : ''}`))));
+}
+/* after delivery: the customer reviews the order */
+function reviewSheet(o) {
+  const mine = S.reviews.find(r => r.order_id === o.id);
+  let stars = mine ? mine.stars : 0, blob = null, prev = '', keepPhoto = mine ? mine.photo : '';
+  const err = el('div', { class: 'err', role: 'alert' });
+  const starBox = el('div', { class: 'star-pick', role: 'radiogroup', 'aria-label': 'Stars' });
+  const drawStars = () => starBox.replaceChildren(...[1, 2, 3, 4, 5].map(n => el('button', { type: 'button', role: 'radio', 'aria-checked': n === stars, 'aria-label': n + ' stars', id: 'star-' + n, class: n <= stars ? 'on' : '', onclick: () => { stars = n; drawStars(); } }, '★')));
+  const text = el('textarea', { id: 'rv-text', maxlength: 1000, placeholder: 'How was the food? (optional)', value: mine ? mine.body : '' });
+  const shot = el('div', { class: 'shotbox' });
+  const drawShot = () => shot.replaceChildren(...[(prev || keepPhoto) ? el('img', { class: 'shot-prev', src: prev || publicUrl(keepPhoto), alt: '' }) : null,
+    el('label', { class: 'btn small', style: 'text-align:center' }, (prev || keepPhoto) ? 'Change photo' : 'Add a photo (optional)',
+      el('input', { type: 'file', accept: 'image/*', id: 'rv-file', style: 'display:none', onchange: async e => {
+        const f = e.target.files && e.target.files[0]; if (!f) return;
+        try { blob = await shrink(f); if (prev) URL.revokeObjectURL(prev); prev = URL.createObjectURL(blob); drawShot(); } catch (x) { err.textContent = niceErr(x); }
+      } }))].filter(Boolean));
+  drawStars(); drawShot();
+  openModal(el('div', { class: 'sheet' }, el('h2', { text: mine ? 'Your review' : 'How was your order?' }),
+    el('div', { class: 'sub', text: `Order #${pad3(o.no)} · ${(o.items || []).map(i => i.name).join(', ')}` }),
+    starBox, text, shot, err,
+    el('div', { class: 'actions' }, el('button', { class: 'btn', type: 'button', onclick: closeModal }, 'Cancel'),
+      el('button', { class: 'btn primary', type: 'button', id: 'rv-send', onclick: async e => {
+        if (!stars) { err.textContent = 'Tap the stars first.'; return; }
+        const btn = e.currentTarget; btn.disabled = true; err.textContent = '';
+        try {
+          let photo = keepPhoto || '';
+          if (blob) {
+            photo = `reviews/${S.session.user.id}/${newId()}.jpg`;
+            const up = await sb.storage.from('photos').upload(photo, blob, { contentType: 'image/jpeg', upsert: false });
+            if (up.error) throw up.error;
+          }
+          const { error } = await sb.rpc('submit_review', { p_order_id: o.id, p_stars: stars, p_body: text.value.trim(), p_photo: photo });
+          if (error) throw error;
+          closeModal(); toast('Thank you for your review!'); await loadReviews(); render();
+        } catch (x) { err.textContent = niceErr(x); btn.disabled = false; }
+      } }, mine ? 'Update review' : 'Send review'))));
+}
 const SVC = { day: '☀ Day menu', night: '🌙 Night menu' };
 /* the order that needs the customer's attention, shown above the menu */
 function actionBanner() {
@@ -181,12 +257,7 @@ function viewMenu(root) {
   const all = S.menu.filter(m => !m.deleted);
   if (!all.length) { root.append(el('div', { class: 'empty' }, el('b', { text: 'The menu is empty right now' }), 'Please check back later.')); return; }
   const ban = actionBanner(); if (ban) root.append(ban);
-  const both = all.some(m => svcOf(m) === 'night') && all.some(m => svcOf(m) === 'day');
-  if (both) {
-    root.append(el('div', { class: 'svc-switch', role: 'group', 'aria-label': 'Day or night menu' }, ['day', 'night'].map(k =>
-      el('button', { type: 'button', class: k, id: 'svc-' + k, 'aria-pressed': S.svc === k, onclick: () => { S.svc = k; store.set('svc', k); S.cat = 'All'; render(); } }, SVC[k]))));
-  }
-  const menu = both ? all.filter(m => svcOf(m) === S.svc) : all;
+  const menu = all;
   const cats = ['All', ...new Set(menu.map(m => m.category || 'Other'))];
   if (!cats.includes(S.cat)) S.cat = 'All';
   root.append(el('div', { class: 'chips' }, cats.map(c => el('button', { class: 'chip', type: 'button', 'aria-pressed': S.cat === c, onclick: () => { S.cat = c; render(); } }, c))));
@@ -202,9 +273,11 @@ function dishCard(m) {
   const inB = S.basket.filter(l => l.menuId === m.id).reduce((a, l) => a + l.qty, 0);
   const pic = m.photo ? el('img', { class: 'img', src: publicUrl(m.photo), alt: m.name, loading: 'lazy' }) : el('div', { class: 'ph', style: '--h:' + hue(m.name), 'aria-hidden': 'true', text: initial(m.name) });
   if (m.photo) pic.addEventListener('error', () => pic.replaceWith(el('div', { class: 'ph', style: '--h:' + hue(m.name), text: initial(m.name) })));
-  return el('article', { class: 'dish' + (m.available === false ? ' off' : '') }, pic,
+  const r = ratingOf(m.id);
+  return el('article', { class: 'dish' + (m.available === false ? ' off' : ''), 'data-id': m.id, tabindex: '0', onclick: e => { if (!e.target.closest('.add')) dishSheet(m); } }, pic,
     el('div', { class: 'body' },
-      el('h3', { text: m.name }),
+      el('h3', {}, m.name, hasNight() ? el('span', { class: 'svc-ic ' + svcOf(m), title: svcOf(m) === 'night' ? 'Night dish' : 'Day dish', text: svcOf(m) === 'night' ? '🌙' : '☀' }) : null),
+      r ? el('div', { class: 'rating', text: `★ ${r.avg} (${r.n})` }) : null,
       m.description ? el('div', { class: 'desc', text: m.description }) : null,
       (m.windows || []).length ? el('div', { class: 'win', text: '🕒 ' + m.windows.map(winLabel).join(', ') }) : null,
       el('div', { class: 'foot' }, el('span', { class: 'price', text: vs.length ? (lo === hi ? money(lo) : `${money(lo)} – ${money(hi)}`) : '' }),
@@ -556,6 +629,9 @@ function orderCard(o) {
     el('div', { class: 'sumrow total' }, el('span', { text: 'Total' }), el('span', { text: money(o.total) })),
     payBox(o),
     o.delivery_proof ? el('div', { class: 'proofbox' }, el('b', { text: o.type === 'delivery' ? 'Delivery photo' : 'Photo' }), privatePic(o.delivery_proof, 'Delivery photo')) : null,
+    o.status === 'done' && !S.reviewsOff ? (() => { const mine = S.reviews.find(r => r.order_id === o.id);
+      return el('button', { class: mine ? 'my-rev' : 'btn small primary', type: 'button', id: 'rv-' + o.no, style: 'align-self:flex-start', onclick: () => reviewSheet(o) },
+        mine ? [el('span', { class: 'stars', text: starStr(mine.stars) }), ' Your review · edit'] : '★ Write a review'); })() : null,
     S.msgsOff ? null : el('button', { class: 'link', type: 'button', style: 'align-self:flex-start', onclick: () => openChat(o.no) }, '💬 Message us about this order'));
 }
 function viewOrders(root) {
@@ -661,6 +737,7 @@ async function loadShop() {
     S.biz = { name: b.name || '', currency: b.currency ?? '¥', addresses: Array.isArray(b.addresses) ? b.addresses : [],
       pay: { wechatQr: b.pay_wechat_qr || '', alipayQr: b.pay_alipay_qr || '', wechatId: b.pay_wechat_id || '', alipayId: b.pay_alipay_id || '' } };
     S.menu = mn.data || [];
+    await loadReviews();
     S.basket = S.basket.filter(l => dish(l.menuId));
     S.loaded = true; S.loadErr = '';
   } catch (e) { S.loadErr = niceErr(e) + ' Pull down to reload.'; }
