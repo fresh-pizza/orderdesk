@@ -11,7 +11,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   phoneDomain: 'phone.orderdesk.app', // phone logins are stored as <digits>@this, no SMS involved
 };
-const SHOP_VERSION = '1.1.0';
+const SHOP_VERSION = '1.2.0';
 
 /* ---------- helpers ---------- */
 function el(tag, props, ...kids) {
@@ -109,6 +109,7 @@ function renderTop() {
 }
 function go(v) { S.view = v; render(); window.scrollTo(0, 0); if (v === 'orders') loadOrders(); }
 function render() {
+  document.body.dataset.view = S.view;
   renderTop();
   const main = $('#main');
   main.replaceChildren();
@@ -165,8 +166,19 @@ function renderBar() {
   const n = basketCount();
   const bar = $('#bar');
   if (!n || S.view === 'checkout' || S.view === 'done') { bar.replaceChildren(); return; }
-  bar.replaceChildren(el('button', { class: 'go', type: 'button', id: 'go-checkout', onclick: () => go('checkout') },
-    el('span', { text: `${n} item${n === 1 ? '' : 's'} · Checkout` }), el('b', { text: money(basketTotal()) })));
+  const d = S.draft, fee = d.type === 'pickup' ? null : addrFee(d.address);
+  const feeLine = d.type === 'pickup' ? 'Pickup · no delivery fee'
+    : fee !== null ? (fee ? `+ delivery ${money(fee)} · ${d.address}` : `Free delivery · ${d.address}`) : '+ delivery fee by address';
+  const t = money(basketTotal()), cur = S.biz.currency || '';
+  const icon = el('span', { class: 'cart-svg', 'aria-hidden': 'true' });
+  icon.innerHTML = '<svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8h14l-1.3 11.2a2 2 0 0 1-2 1.8H8.3a2 2 0 0 1-2-1.8z"/><path d="M9 10V7a3 3 0 0 1 6 0v3"/></svg>';
+  const toCheckout = () => go('checkout');
+  bar.replaceChildren(el('div', { class: 'cartbar' },
+    el('button', { class: 'cart-ic', type: 'button', 'aria-label': `Basket, ${n} item${n === 1 ? '' : 's'}`, onclick: toCheckout }, icon, el('span', { class: 'cart-badge', text: n > 99 ? '99+' : n })),
+    el('button', { class: 'cart-sum', type: 'button', onclick: toCheckout },
+      el('b', { class: 'cart-total' }, t.startsWith(cur) && cur ? [el('small', { text: cur }), t.slice(cur.length)] : t),
+      el('small', { class: 'cart-fee', text: feeLine })),
+    el('button', { class: 'cart-go', type: 'button', id: 'go-checkout', onclick: toCheckout }, 'Checkout')));
 }
 
 /* ---------- checkout ---------- */
@@ -201,9 +213,9 @@ function viewCheckout(root) {
   const dates = [0, 1, 2, 3, 4, 5, 6].map(i => isoDay(Date.now() + i * DAY));
   const err = el('div', { class: 'err', role: 'alert' });
   root.append(
-    el('div', { class: 'box' }, el('h2', { text: 'Your order' }), lines,
+    el('div', { class: 'box' }, el('h2', {}, el('span', { class: 'stepn', text: '1' }), 'Your order'), lines,
       el('button', { class: 'link', type: 'button', style: 'align-self:flex-start', onclick: () => go('menu') }, '+ Add more')),
-    el('div', { class: 'box' }, el('h2', { text: 'Delivery or pickup' }),
+    el('div', { class: 'box' }, el('h2', {}, el('span', { class: 'stepn', text: '2' }), 'Delivery or pickup'),
       el('div', { class: 'seg', role: 'group', 'aria-label': 'Delivery or pickup' }, [['delivery', 'Delivery'], ['pickup', 'Pickup']].map(([k, lbl]) =>
         el('button', { type: 'button', 'aria-pressed': d.type === k, onclick: () => { d.type = k; render(); } }, lbl))),
       d.type === 'delivery' ? el('div', { class: 'field' }, el('label', { for: 'c-addr', text: 'Delivery address' }),
@@ -216,11 +228,11 @@ function viewCheckout(root) {
           el('select', { id: 'c-slot', 'aria-label': 'Time', onchange: e => { d.slot = e.target.value; } },
             el('option', { value: '', text: 'ASAP' }), list.map(x => el('option', { value: x, selected: x === d.slot, text: x })))),
         clash ? el('div', { class: 'err', text: 'These dishes are served at different times. Please order them separately.' }) : null)),
-    el('div', { class: 'box' }, el('h2', { text: 'Your details' }),
+    el('div', { class: 'box' }, el('h2', {}, el('span', { class: 'stepn', text: '3' }), 'Your details'),
       el('div', { class: 'two' }, fld('c-name', 'Name', 'name', { autocomplete: 'name' }), fld('c-phone', 'Phone (for the rider)', 'phone', { type: 'tel', inputmode: 'tel', autocomplete: 'tel' })),
       el('div', { class: 'field' }, el('label', { for: 'c-note', text: 'Note for the kitchen (optional)' }),
         el('textarea', { id: 'c-note', value: d.note || '', placeholder: 'Less spicy, extra raita…', oninput: e => { d.note = e.target.value; store.set('draft', d); } }))),
-    el('div', { class: 'box' },
+    el('div', { class: 'box sumbox' },
       el('div', { class: 'sumrow' }, el('span', { text: 'Items' }), el('span', { text: money(sub) })),
       d.type === 'delivery' ? el('div', { class: 'sumrow' }, el('span', { text: 'Delivery' + (d.address ? ' · ' + d.address : '') }), el('span', { text: d.address ? feeText(fee) : '–' })) : null,
       el('div', { class: 'sumrow total' }, el('span', { text: 'Total' }), el('span', { id: 'c-total', text: money(sub + fee) })),
