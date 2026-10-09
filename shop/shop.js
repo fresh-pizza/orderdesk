@@ -11,7 +11,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   phoneDomain: 'phone.orderdesk.app', // phone logins are stored as <digits>@this, no SMS involved
 };
-const SHOP_VERSION = '2.3.0';
+const SHOP_VERSION = '2.3.1';
 /* phones (WeChat especially) keep old copies of web pages; if a newer shop is online, reload it */
 (async function freshness() {
   try {
@@ -176,6 +176,14 @@ const feeText = f => (f ? money(f) : 'Free');
 const saveBasket = () => { store.set('basket', S.basket); store.set('draft', Object.assign({}, S.draft, { slot: '', slotDate: '' })); };
 const publicUrl = path => CFG.url + '/storage/v1/object/public/photos/' + path.split('/').map(encodeURIComponent).join('/');
 const dish = id => S.menu.find(m => m.id === id);
+/* the order set in the admin app (Menu > Arrange); dishes not arranged yet follow A to Z. Categories follow their first dish. */
+const sortOf = m => (m.sort == null ? Infinity : Number(m.sort));
+function orderedMenu(list) {
+  const rk = new Map();
+  for (const m of list) { const c = m.category || 'Other'; rk.set(c, Math.min(rk.has(c) ? rk.get(c) : Infinity, sortOf(m))); }
+  return list.slice().sort((a, b) => { const ca = a.category || 'Other', cb = b.category || 'Other';
+    return (rk.get(ca) - rk.get(cb) || 0) || ca.localeCompare(cb) || (sortOf(a) - sortOf(b) || 0) || (a.name || '').localeCompare(b.name || ''); });
+}
 const priceOf = (m, variant) => { const v = (m.variants || []).find(x => (x.label || '') === (variant || '')); return v ? num(v.price) : 0; };
 /* delivery fee: orders with pizza use the address's pizza fee (when set) */
 const feeOf = (a, pizza) => (pizza && a.feePizza !== '' && a.feePizza != null ? num(a.feePizza) : num(a.fee));
@@ -451,10 +459,10 @@ function viewMenu(root) {
   const all = S.menu.filter(m => !m.deleted);
   if (!all.length) { root.append(el('div', { class: 'empty' }, el('b', { text: 'The menu is empty right now' }), 'Please check back later.')); return; }
   const ban = actionBanner(); if (ban) root.append(ban);
-  const menu = all;
+  const menu = orderedMenu(all);
   const cats = ['All', ...new Set(menu.map(m => m.category || 'Other'))];
   if (!cats.includes(S.cat)) S.cat = 'All';
-  const show = menu.filter(m => S.cat === 'All' || (m.category || 'Other') === S.cat).sort((a, b) => (a.category || '').localeCompare(b.category || '') || (a.name || '').localeCompare(b.name || ''));
+  const show = menu.filter(m => S.cat === 'All' || (m.category || 'Other') === S.cat);
   const by = new Map();
   for (const m of show) { const c = m.category || 'Other'; if (!by.has(c)) by.set(c, []); by.get(c).push(m); }
   const rail = el('nav', { class: 'mrail', 'aria-label': 'Categories' }, cats.map(c => el('button', { class: 'chip rail-i', type: 'button', 'aria-pressed': S.cat === c, onclick: () => { S.cat = c; render(); window.scrollTo(0, 0); } }, c)));

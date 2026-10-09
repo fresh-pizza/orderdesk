@@ -51,7 +51,7 @@ h1,h2,h3{font-family:var(--font-display);margin:0;letter-spacing:-.01em;text-wra
 .nav .badge{margin-left:auto;background:var(--chilli);color:#fff;border-radius:99px;font-size:12px;padding:1px 7px;font-variant-numeric:tabular-nums}
 .side .grow{flex:1}
 .gear{background:none;border:1px solid var(--line);border-radius:8px;padding:9px 10px;color:var(--muted);text-align:left}
-main{padding:24px clamp(16px,3vw,36px);padding-bottom:40px;min-width:0;max-width:1100px;width:100%}
+main{--px:clamp(16px,3vw,36px);--pt:24px;padding:24px clamp(16px,3vw,36px);padding-bottom:40px;min-width:0;max-width:1100px;width:100%}
 .page-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:16px}
 .page-head h1{font-size:26px}
 .sub{color:var(--muted);font-size:13px}
@@ -238,7 +238,7 @@ body{padding-top:env(safe-area-inset-top,0px);-webkit-tap-highlight-color:transp
 
 @media (max-width:820px){
   body{font-size:15px}
-  main{padding:12px 14px 150px}
+  main{--px:14px;--pt:12px;padding:12px 14px 150px}
   .hide-m{display:none}
   /* header: title left, small controls right, one line */
   .page-head{flex-wrap:nowrap;margin-bottom:12px;gap:8px}
@@ -453,7 +453,7 @@ img.avatar{object-fit:cover;background:var(--surface2);display:block}
   .mm-item svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;color:var(--muted)}
   .mm-item[aria-current="page"]{background:var(--accent-bg)}
   .mm-item:active{background:var(--surface2)}
-  main{padding:12px 12px calc(76px + env(safe-area-inset-bottom,0px))}
+  main{--px:12px;--pt:12px;padding:12px 12px calc(76px + env(safe-area-inset-bottom,0px))}
   #toast{bottom:calc(70px + env(safe-area-inset-bottom,0px))}
 }
 /* buttons */
@@ -734,3 +734,25 @@ h2 .tag.kit{margin-left:8px;font-size:12px;vertical-align:3px}
 .rp-new{font-size:28px;font-weight:800;letter-spacing:3px;text-align:center;padding:10px;border:1px dashed var(--line);border-radius:12px}
 .acct-ic{width:40px;height:40px;border-radius:50%;display:grid;place-items:center;background:var(--surface2);font-size:18px;flex:none}
 .acct-row .meta .vtag{margin-left:2px}
+
+/* 2.10: orders header stays put while the list scrolls */
+.ord-sticky{position:sticky;top:0;z-index:20;background:var(--bg);margin:calc(-1 * var(--pt,24px)) calc(-1 * var(--px,24px)) 10px;padding:var(--pt,24px) var(--px,24px) 2px;box-shadow:0 1px 0 var(--line)}
+.ord-sticky .page-head{margin-bottom:10px}
+.ord-sticky .chips{margin:0 0 10px;padding:0}
+.ord-sticky .svc-seg{margin-bottom:10px}
+/* long customer lists stay fast without cutting them off */
+.clist.big .crow{content-visibility:auto;contain-intrinsic-size:auto 64px}
+/* pictures */
+.pic-edit{display:flex;align-items:center;gap:12px}
+.pic-edit .avatar.big{width:64px;height:64px;font-size:28px}
+.pic-btns{display:flex;flex-direction:column;align-items:flex-start;gap:6px}
+#as-pic{margin-bottom:4px}
+/* arrange the menu */
+.sheet.arrange .arr-list{display:flex;flex-direction:column;gap:6px}
+.arr-cat{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:10px;padding:6px 10px;background:var(--surface2);border-radius:8px}
+.arr-row{display:grid;grid-template-columns:40px minmax(0,1fr) auto;gap:10px;align-items:center;padding:4px 2px}
+.arr-th,.arr-row .ph{width:40px;height:40px;border-radius:8px;object-fit:cover;font-size:18px}
+.arr-nm{font-weight:600;overflow-wrap:anywhere}
+.arr-mv{display:flex;gap:6px}
+.arr-mv .btn{min-width:38px;padding:6px 8px}
+.ord-sticky:not(:first-child){margin-top:0;padding-top:8px}

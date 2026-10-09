@@ -9,7 +9,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   bucket: 'photos',
 };
-const VERSION = '2.9.1';
+const VERSION = '2.10.0';
 const COLLS = ['menu', 'customers', 'orders', 'settings', 'purchases'];
 const DEFAULT_SETTINGS = { id: 'main', name: 'My kitchen', currency: '¥', deliveryFee: 0, addresses: [], wechatQr: '', alipayQr: '', wechatId: '', alipayId: '', pickup: true, inventory: {} };
 
@@ -205,12 +205,13 @@ function payLogo(m) {
 }
 const isCancelled = o => o.status === 'cancelled';
 const isUnpaid = o => !isCancelled(o) && !o.paid;
+const isOpenOrder = o => !isCancelled(o) && !(o.paid && o.status === 'done'); // not yet both paid and delivered
 const M = { menu: new Map(), customers: new Map(), orders: new Map(), settings: new Map(), purchases: new Map() };
 const S = {
   ready: false, uid: null, email: '', signedIn: false,
   menu: [], customers: [], orders: [], purchases: [], settings: clone(DEFAULT_SETTINGS),
   loaded: { menu: true, customers: true, orders: true, config: true },
-  view: 'orders', statMode: 'days', statPick: null, ordFilter: 'all', ordLimit: 60, menuQ: '', menuCat: 'All', custQ: '', pickQ: '', pickCat: 'All',
+  view: 'orders', statMode: 'days', statPick: null, ordFilter: 'open', ordLimit: 60, menuQ: '', menuCat: 'All', custQ: '', pickQ: '', pickCat: 'All',
   draft: null, blobUrls: new Map(), outbox: new Map(), svc: 'all', msgs: [], msgsOff: false, reviews: [], reviewsOff: false,
 };
 function refreshArrays(colls) {
@@ -285,16 +286,18 @@ const MAP = {
       r.winTouched ? { windows: r.windows || [] } : {},
       r.svcTouched ? { service: r.service === 'night' ? 'night' : 'day' } : {},
       r.ingTouched ? { ingredients: r.ingredients || [] } : {},
-      r.kitTouched ? { kitchen: r.kitchen === 'pizza' ? 'pizza' : 'other' } : {}),
+      r.kitTouched ? { kitchen: r.kitchen === 'pizza' ? 'pizza' : 'other' } : {},
+      r.sortTouched ? { sort: r.sort == null ? null : r.sort } : {}),
     from: x => ({ id: x.id, name: x.name, category: x.category, description: x.description, variants: x.variants || [], photo: x.photo || '', available: x.available !== false, example: !!x.example, deleted: !!x.deleted,
       windows: Array.isArray(x.windows) ? x.windows : [], winTouched: x.windows !== undefined, service: x.service === 'night' ? 'night' : 'day', svcTouched: x.service !== undefined,
       ingredients: Array.isArray(x.ingredients) ? x.ingredients : [], ingTouched: x.ingredients !== undefined,
-      kitchen: x.kitchen === 'pizza' ? 'pizza' : 'other', kitTouched: x.kitchen !== undefined }),
+      kitchen: x.kitchen === 'pizza' ? 'pizza' : 'other', kitTouched: x.kitchen !== undefined,
+      sort: x.sort == null ? null : Number(x.sort), sortTouched: x.sort !== undefined }),
   },
   customers: {
     // photo is only sent when there is one, so this works even before the photo column exists
-    to: r => Object.assign({ id: r.id, name: r.name || '', phone: r.phone || '', address: r.address || '', notes: r.notes || '', created_at: toIso(r.createdAt), deleted: !!r.deleted }, r.photo ? { photo: r.photo } : {}),
-    from: x => ({ id: x.id, name: x.name, phone: x.phone, address: x.address, notes: x.notes, photo: x.photo || '', userId: x.user_id || '', createdAt: toMs(x.created_at), deleted: !!x.deleted }),
+    to: r => Object.assign({ id: r.id, name: r.name || '', phone: r.phone || '', address: r.address || '', notes: r.notes || '', created_at: toIso(r.createdAt), deleted: !!r.deleted }, r.photo || r.photoTouched ? { photo: r.photo || '' } : {}),
+    from: x => ({ id: x.id, name: x.name, phone: x.phone, address: x.address, notes: x.notes, photo: x.photo || '', photoTouched: x.photo !== undefined, userId: x.user_id || '', createdAt: toMs(x.created_at), deleted: !!x.deleted }),
   },
   orders: {
     to: r => Object.assign({ id: r.id, no: r.no || 0, customer_id: r.customerId || null, customer_name: r.customerName || '', phone: r.phone || '', address: r.address || '', type: r.type || 'delivery', items: r.items || [], subtotal: num(r.subtotal), fee: num(r.fee), total: num(r.total), note: r.note || '', status: r.status || 'new', created_at: toIso(r.createdAt), deleted: !!r.deleted },
@@ -516,8 +519,15 @@ function custStats() {
   return m;
 }
 const nextNo = () => [...M.orders.values()].reduce((a, o) => Math.max(a, o.no || 0), 0) + 1;
-const sortedMenu = () => S.menu.slice().sort((a, b) =>
-  (a.category || '').localeCompare(b.category || '') || (a.name || '').localeCompare(b.name || ''));
+/* the order you arranged (Menu > Arrange); anything not arranged yet goes after, A to Z. Categories follow their first dish. */
+const sortOf = m => (m.sort == null ? Infinity : m.sort);
+function catRanks(list) { const r = new Map(); for (const m of list) { const c = m.category || 'Other'; r.set(c, Math.min(r.has(c) ? r.get(c) : Infinity, sortOf(m))); } return r; }
+function orderedMenu(list) {
+  const rk = catRanks(list);
+  return list.slice().sort((a, b) => { const ca = a.category || 'Other', cb = b.category || 'Other';
+    return (rk.get(ca) - rk.get(cb) || 0) || ca.localeCompare(cb) || (sortOf(a) - sortOf(b) || 0) || (a.name || '').localeCompare(b.name || ''); });
+}
+const sortedMenu = () => orderedMenu(S.menu);
 const priceText = it => {
   const v = (it.variants || []).map(x => Number(x.price) || 0);
   if (!v.length) return '';
@@ -634,32 +644,34 @@ function icon(paths) {
 function pageHead(title, sub, ...actions) {
   return el('div', { class: 'page-head' },
     el('div', { class: 'head-title' }, el('h1', {}, ...(Array.isArray(title) ? title : [title])), sub ? el('div', { class: 'sub', text: sub }) : null),
-    el('div', { class: 'head-acts' }, syncChip(), ...actions,
-      el('button', { class: 'btn gear-m icon-btn', type: 'button', 'aria-label': 'Settings', onclick: () => settingsModal() }, icon('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>'))));
+    el('div', { class: 'head-acts' }, syncChip(), ...actions));
 }
 function tile(label, value, hot) { return el('div', { class: 'tile' + (hot ? ' hot' : '') }, el('b', { text: value }), el('span', { text: label })); }
 
 /* ---------- ORDERS ---------- */
 function viewOrders(root) {
-  root.append(pageHead(['Orders', el('span', { class: 'h-date', text: new Date().toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }) })], '',
-    el('button', { class: 'btn primary hide-m', type: 'button', onclick: () => go('new') }, '+ New order')));
+  const head = pageHead(['Orders', el('span', { class: 'h-date', text: new Date().toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }) })], '',
+    el('button', { class: 'btn primary hide-m', type: 'button', onclick: () => go('new') }, '+ New order'));
   const paidN = S.orders.filter(o => !isCancelled(o) && o.paid).length;
   const unpaidN = S.orders.filter(isUnpaid).length;
   const cancN = S.orders.filter(isCancelled).length;
   const isDone = isComplete;
   const doneN = S.orders.filter(isDone).length;
-  const filters = [['all', 'All'], ['paid', `Paid (${paidN})`], ['unpaid', `Unpaid (${unpaidN})`], ['done', `Completed (${doneN})`], ['cancelled', `Cancelled (${cancN})`]];
-  if (!filters.some(([k]) => k === S.ordFilter)) S.ordFilter = 'all';
-  root.append(el('div', { class: 'chips' }, filters.map(([k, label]) =>
-    el('button', { class: 'chip', type: 'button', 'aria-pressed': S.ordFilter === k, onclick: () => { S.ordFilter = k; S.ordLimit = 60; render(true); } }, label))));
+  const openN = S.orders.filter(isOpenOrder).length;
+  const filters = [['all', 'All'], ['open', `Open (${openN})`], ['paid', `Paid (${paidN})`], ['unpaid', `Unpaid (${unpaidN})`], ['done', `Completed (${doneN})`], ['cancelled', `Cancelled (${cancN})`]];
+  if (!filters.some(([k]) => k === S.ordFilter)) S.ordFilter = 'open';
+  const chips = el('div', { class: 'chips' }, filters.map(([k, label]) =>
+    el('button', { class: 'chip', type: 'button', 'aria-pressed': S.ordFilter === k, onclick: () => { S.ordFilter = k; S.ordLimit = 60; render(true); } }, label)));
+  let seg = null;
   if (hasNight()) {
     const active = o => !isCancelled(o) && !isComplete(o);
     const cnt = k => S.orders.filter(o => active(o) && (k === 'all' || orderSvc(o) === k)).length;
-    root.append(el('div', { class: 'svc-seg', role: 'group', 'aria-label': 'Day or night orders' }, [['all', 'All'], ['day', SVC.day], ['night', SVC.night]].map(([k, l]) =>
+    seg = el('div', { class: 'svc-seg', role: 'group', 'aria-label': 'Day or night orders' }, [['all', 'All'], ['day', SVC.day], ['night', SVC.night]].map(([k, l]) =>
       el('button', { type: 'button', class: 'svc-btn ' + k, id: 'svc-' + k, 'aria-pressed': S.svc === k, title: 'Open orders', onclick: () => { S.svc = k; S.ordLimit = 60; render(true); } },
-        el('span', { text: l }), el('b', { text: cnt(k) })))));
+        el('span', { text: l }), el('b', { text: cnt(k) }))));
   } else S.svc = 'all';
-  const keep0 = { all: () => true, paid: o => !isCancelled(o) && o.paid, unpaid: isUnpaid, done: isDone, cancelled: isCancelled }[S.ordFilter];
+  root.append(el('div', { class: 'ord-sticky' }, head, chips, seg));
+  const keep0 = { all: () => true, open: isOpenOrder, paid: o => !isCancelled(o) && o.paid, unpaid: isUnpaid, done: isDone, cancelled: isCancelled }[S.ordFilter];
   const keep = o => keep0(o) && (S.svc === 'all' || orderSvc(o) === S.svc);
   const list = S.orders.filter(keep).sort((a, b) => b.createdAt - a.createdAt);
   if (!list.length) {
@@ -699,7 +711,10 @@ const custOf = o => (o.customerId && M.customers.get(o.customerId)) || null;
 /* the shop keeps its own automatic profile per account; those live in Shop accounts, never in your Customers list */
 const AUTO_PROFILE = 'Signed up in the shop';
 const realCusts = () => S.customers.filter(c => c.notes !== AUTO_PROFILE);
-function whoAvatar(o, cls) { const c = custOf(o); return avatar({ name: o.customerName || 'Walk-in', photo: c && !c.deleted ? c.photo : '' }, cls); }
+function whoAvatar(o, cls) { const c = custOf(o); return avatar({ name: whoName(o), photo: c && !c.deleted ? c.photo : '' }, cls); }
+/* a linked customer's current name and phone win over what was typed at checkout, so a change shows everywhere */
+function whoName(o) { const c = custOf(o); return (c && !c.deleted && (c.name || '').trim()) || o.customerName || 'Walk-in'; }
+function whoPhone(o) { const c = custOf(o); return (c && !c.deleted && (c.phone || '').trim()) || o.phone || ''; }
 /* progress the client sees: Received -> Accepted -> Ready / On the way -> Done */
 /* order flow: Received -> Accept -> Mark paid -> On the way / Ready -> Delivered / Picked up */
 const doneLabel = o => (o.type === 'delivery' ? 'Delivered' : 'Picked up');
@@ -764,7 +779,7 @@ function acceptSheet(o0, after) {
   const o = M.orders.get(o0.id) || o0;
   openModal(el('div', { class: 'sheet accept' }, el('h2', { text: `Accept order ${orderNo(o.no)}?` }),
     el('div', { class: 'acc-card' },
-      el('div', { class: 'who' }, whoAvatar(o, 'sm'), el('span', { class: 'who-nm' }, o.customerName || 'Walk-in', o.phone ? el('small', { text: o.phone }) : null)),
+      el('div', { class: 'who' }, whoAvatar(o, 'sm'), el('span', { class: 'who-nm' }, whoName(o), whoPhone(o) ? el('small', { text: whoPhone(o) }) : null)),
       o.address ? el('div', { class: 'addr', text: '📍 ' + o.address }) : null,
       slotText(o) || o.slot ? el('div', { class: 'when', text: '🕒 ' + (slotText(o) || o.slot) }) : null,
       el('ul', { class: 'lines' }, itemLines(o)),
@@ -799,7 +814,7 @@ function ticket(o) {
       payPill(o)),
     el('div', { class: 't-body' },
       stepText(o) ? el('div', { class: 'stepnow', text: stepText(o) }) : isNew(o) && !isCancelled(o) && o.source === 'shop' ? el('div', { class: 'stepnow new', text: 'New · accept or cancel' }) : null,
-      el('div', { class: 'who' }, whoAvatar(o, 'sm'), el('span', { class: 'who-nm' }, o.customerName || 'Walk-in', o.phone ? el('small', { text: o.phone }) : null)),
+      el('div', { class: 'who' }, whoAvatar(o, 'sm'), el('span', { class: 'who-nm' }, whoName(o), whoPhone(o) ? el('small', { text: whoPhone(o) }) : null)),
       o.address ? el('div', { class: 'addr', text: o.address }) : null,
       slotText(o) ? el('div', { class: 'when', text: '🕒 ' + slotText(o) }) : null,
       el('ul', { class: 'lines' }, itemLines(o)),
@@ -853,7 +868,7 @@ function orderSheet(o0) {
         el('span', { class: 'dot', text: i < cur ? '✓' : i + 1 }), el('span', { text: l })))) : el('div', { class: 'err', text: 'Cancelled' }),
     el('div', { class: 'od-acts' }, orderActions(o, again)),
     el('section', { class: 'od-sect od-who' },
-      el('div', { class: 'who-head' }, whoAvatar(o, 'big'), el('div', { style: 'min-width:0' }, el('b', { text: o.customerName || 'Walk-in' }), o.phone ? el('div', { class: 'sub', text: o.phone }) : null,
+      el('div', { class: 'who-head' }, whoAvatar(o, 'big'), el('div', { style: 'min-width:0' }, el('b', { text: whoName(o) }), whoPhone(o) ? el('div', { class: 'sub', text: whoPhone(o) }) : null,
         el('div', { class: 'login-tag', text: loginText(o) || (o.source === 'shop' ? 'Shop customer' : 'Order taken by you') }), acctBits(o, again))),
       el('div', { class: 'btns' },
         o.phone ? el('a', { class: 'btn small', href: 'tel:' + o.phone.replace(/[^\d+]/g, '') }, '📞 Call') : null,
@@ -1081,7 +1096,7 @@ function pickCustomer(c) {
   refreshCustomerBits(); refreshBasket();
 }
 function menuCats(list) {
-  return ['All', ...new Set(list.map(m => m.category || 'Other'))].sort((a, b) => a === 'All' ? -1 : b === 'All' ? 1 : a.localeCompare(b));
+  return ['All', ...new Set(orderedMenu(list).map(m => m.category || 'Other'))];
 }
 function refreshGrid() {
   const cats = menuCats(S.menu);
@@ -1192,7 +1207,7 @@ async function saveOrder() {
   };
   if (d.slot || (d.slotDate && d.slotDate !== isoDay(now))) Object.assign(order, { slotDate: d.slotDate, slot: d.slot || '', slotTouched: true });
   if (await write(Store.put('orders', order), `Order ${orderNo(no)} saved`)) {
-    S.draft = newDraft(); S.ordFilter = 'all'; go('orders');
+    S.draft = newDraft(); S.ordFilter = 'open'; go('orders');
   } else btn.disabled = false;
 }
 
@@ -1215,6 +1230,7 @@ async function loadSamples() {
 }
 function viewMenu(root) {
   root.append(pageHead('Menu', 'Dishes, sizes and prices. Tap Edit to change a photo.',
+    S.menu.length > 1 ? el('button', { class: 'btn', type: 'button', id: 'm-arrange', onclick: arrangeSheet }, 'Arrange') : null,
     el('button', { class: 'btn primary', type: 'button', onclick: () => menuModal(null) }, '+ Add', el('span', { class: 'hide-m', text: ' dish' }))));
   const samples = S.menu.filter(m => m.example);
   if (samples.length) root.append(el('div', { class: 'banner slim' }, el('span', { text: `${samples.length} sample dishes with made-up prices.` }),
@@ -1232,6 +1248,33 @@ function viewMenu(root) {
   const res = el('div');
   P.fn = () => { res.replaceChildren(); menuResults(res); renderNav(); };
   P.fn(); root.append(res);
+}
+/* put the dishes in the order the shop shows them: categories and the dishes inside them */
+function arrangeSheet() {
+  const groups = [];
+  for (const m of orderedMenu(S.menu)) { const c = m.category || 'Other'; let g = groups.find(x => x.cat === c); if (!g) groups.push(g = { cat: c, items: [] }); g.items.push(m); }
+  const list = el('div', { class: 'arr-list' });
+  const mv = (arr, i, d) => { const j = i + d; if (j < 0 || j >= arr.length) return; [arr[i], arr[j]] = [arr[j], arr[i]]; draw(); };
+  const btns = (arr, i, what) => el('span', { class: 'arr-mv' },
+    el('button', { type: 'button', class: 'btn small', 'aria-label': `Move ${what} up`, disabled: i === 0, onclick: () => mv(arr, i, -1) }, '▲'),
+    el('button', { type: 'button', class: 'btn small', 'aria-label': `Move ${what} down`, disabled: i === arr.length - 1, onclick: () => mv(arr, i, 1) }, '▼'));
+  function draw() {
+    list.replaceChildren(...groups.flatMap((g, gi) => [
+      el('div', { class: 'arr-cat', 'data-cat': g.cat }, el('b', { text: g.cat }), btns(groups, gi, g.cat)),
+      ...g.items.map((m, i) => el('div', { class: 'arr-row', 'data-id': m.id }, thumb(m, 'arr-th'), el('span', { class: 'arr-nm', text: m.name }), btns(g.items, i, m.name)))]));
+  }
+  draw();
+  async function save(e) {
+    e.currentTarget.disabled = true;
+    let n = 0;
+    try {
+      for (const g of groups) for (const m of g.items) { n++; if (m.sort !== n || !m.sortTouched) await Store.patch('menu', m.id, { sort: n, sortTouched: true }); }
+      closeModal(); toast('Menu order saved');
+    } catch (x) { toast('Could not save: ' + ((x && x.message) || x), true); e.currentTarget.disabled = false; }
+  }
+  openModal(el('div', { class: 'sheet arrange' }, el('h2', { text: 'Arrange the menu' }),
+    el('div', { class: 'sub', text: 'This is the order your customers see: categories first, then the dishes inside each one.' }), list,
+    el('div', { class: 'actions' }, el('button', { class: 'btn', type: 'button', onclick: closeModal }, 'Cancel'), el('button', { class: 'btn primary', type: 'button', id: 'arr-save', onclick: save }, 'Save order'))));
 }
 function menuResults(root) {
   const q = S.menuQ.trim().toLowerCase();
@@ -1350,7 +1393,8 @@ function menuModal(item) {
       ingredients: m.ingredients.map(g => ({ item: (g.item || '').trim(), qty: g.qty === '' || g.qty == null ? 1 : Math.max(0, Number(g.qty) || 0) })).filter(g => g.item),
       ingTouched: !!(m.ingredients.length || (item && item.ingTouched)),
       service: m.service, svcTouched: !!(m.service === 'night' || (item && item.svcTouched)),
-      kitchen: m.kitchen, kitTouched: !!(m.kitchen === 'pizza' || (item && item.kitTouched)) };
+      kitchen: m.kitchen, kitTouched: !!(m.kitchen === 'pizza' || (item && item.kitTouched)),
+      sort: item && item.sort != null ? item.sort : null, sortTouched: !!(item && item.sortTouched) };
     if (await write(Store.put('menu', rec, extra), 'Saved')) closeModal();
   }
   drawVariants(); drawPhoto(); drawWins();
@@ -1462,6 +1506,7 @@ async function loadMsgs() {
   } catch (_) { /* offline: try on the next sync */ }
 }
 const unreadAll = () => S.msgs.filter(m => !m.from_admin && !m.read_at).length;
+function threadPhoto(clientId) { const c = S.customers.find(x => x.userId === clientId && !x.deleted); return c ? c.photo || '' : ''; }
 function threadName(clientId) {
   const c = S.customers.find(x => x.userId === clientId);
   if (c) return c.name;
@@ -1482,7 +1527,7 @@ function viewMessages(root) {
   root.append(el('div', { class: 'threads' }, list.map(t => {
     const name = threadName(t.id);
     return el('button', { class: 'thread' + (t.unread ? ' unread' : ''), type: 'button', onclick: () => chatSheet(t.id) },
-      avatar({ name }, 'sm'),
+      avatar({ name, photo: threadPhoto(t.id) }, 'sm'),
       el('span', { class: 'th-mid' }, el('b', { text: name }), el('small', { text: (t.last.from_admin ? 'You: ' : '') + (t.last.order_no ? orderNo(t.last.order_no) + ' · ' : '') + t.last.body })),
       el('span', { class: 'th-end' }, el('small', { text: ago(Date.parse(t.last.created_at)) }), t.unread ? el('span', { class: 'badge', text: t.unread }) : null));
   })));
@@ -1530,7 +1575,7 @@ function chatSheet(clientId, orderNoHint) {
   input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
   drawTag();
   openModal(el('div', { class: 'sheet chat' },
-    el('div', { class: 'chat-head' }, avatar({ name }, 'sm'), el('h2', { text: name }), el('button', { class: 'x', type: 'button', 'aria-label': 'Close', onclick: closeModal }, '✕')),
+    el('div', { class: 'chat-head' }, avatar({ name, photo: threadPhoto(clientId) }, 'sm'), el('h2', { text: name }), el('button', { class: 'x', type: 'button', 'aria-label': 'Close', onclick: closeModal }, '✕')),
     list, tag,
     el('div', { class: 'chat-bar' }, input, el('button', { class: 'btn primary', type: 'button', id: 'chat-send', onclick: send }, 'Send'))));
   chatOpen = { clientId, draw };
@@ -1538,6 +1583,51 @@ function chatSheet(clientId, orderNoHint) {
 }
 
 /* ---------- CUSTOMERS ---------- */
+/* ---------- people pictures: change / remove, shown everywhere the customer shows ---------- */
+async function shrinkSquare(file, size = 480) {
+  let src;
+  try { src = await createImageBitmap(file, { imageOrientation: 'from-image' }); }
+  catch (_) { src = await new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = () => rej(new Error('That file is not a picture this phone can read.')); im.src = URL.createObjectURL(file); }); }
+  const w = src.width || src.naturalWidth, h = src.height || src.naturalHeight, side = Math.min(w, h), k = Math.min(1, size / side);
+  const cv = document.createElement('canvas'); cv.width = cv.height = Math.round(side * k);
+  cv.getContext('2d').drawImage(src, (w - side) / 2, (h - side) / 2, side, side, 0, 0, cv.width, cv.height);
+  const webp = await new Promise(r => cv.toBlob(r, 'image/webp', 0.82));
+  if (webp && webp.type === 'image/webp') return webp;
+  return new Promise(r => cv.toBlob(r, 'image/jpeg', 0.82));
+}
+/* onChange({ blob }) for a new picture, onChange({ remove: true }) to clear it */
+function picEditor(name, startPhoto, onChange) {
+  let photo = startPhoto || '', prev = '';
+  const box = el('div', { class: 'pic-edit' });
+  const has = () => !!(prev || photo);
+  function draw() {
+    const av = prev ? el('img', { class: 'avatar big', src: prev, alt: '' }) : avatar({ name, photo }, 'big');
+    box.replaceChildren(av, el('div', { class: 'pic-btns' },
+      el('label', { class: 'btn small', style: 'text-align:center' }, has() ? 'Change photo' : 'Add photo',
+        el('input', { type: 'file', accept: 'image/*', 'aria-label': 'Choose a photo', style: 'display:none', onchange: async e => {
+          const f = e.target.files && e.target.files[0]; if (!f) return;
+          try { const blob = await shrinkSquare(f); if (prev) URL.revokeObjectURL(prev); prev = URL.createObjectURL(blob); photo = ''; draw(); onChange({ blob }); }
+          catch (x) { toast((x && x.message) || 'Could not read that photo.', true); }
+        } })),
+      has() ? el('button', { class: 'link', type: 'button', onclick: () => { if (prev) URL.revokeObjectURL(prev); prev = ''; photo = ''; draw(); onChange({ remove: true }); } }, 'Remove photo') : null));
+  }
+  draw();
+  return box;
+}
+/* save a customer's picture (or clear it): the file is stored on this phone and uploaded with the next sync */
+async function setCustPhoto(id, ch) {
+  const cur = M.customers.get(id); if (!cur) return false;
+  let photo = '';
+  if (ch.blob) {
+    photo = `${S.uid}/cust-${newId()}.${ch.blob.type === 'image/webp' ? 'webp' : 'jpg'}`;
+    try { await queuePhoto(photo, ch.blob); } catch (_) { toast('Could not store the photo on this device.', true); return false; }
+  }
+  const extra = cur.photo && cur.photo !== photo ? photoDelOp(cur.photo) : [];
+  return write(Store.put('customers', Object.assign({}, cur, { photo, photoTouched: true }), extra), ch.remove ? 'Photo removed' : 'Photo saved');
+}
+/* the customer record behind a shop account: the customer you linked, or the profile the shop made for them */
+const acctCust = a => [...M.customers.values()].find(c => !c.deleted && c.userId === a.user_id) || null;
+
 function viewCustomers(root) {
   const accts = S.custTab === 'accounts';
   root.append(pageHead('Customers', accts ? 'Phone and email logins made in the shop.' : 'Everyone who has ordered, with what they like.',
@@ -1568,11 +1658,11 @@ function accountsView(root) {
     const list = S.accts.filter(a => !q || [acctIdent(a.login).id, a.name].some(x => (x || '').toLowerCase().includes(q)));
     if (!list.length) { res.replaceChildren(el('div', { class: 'empty' }, el('b', { text: S.accts.length ? 'No one matches' : 'No shop accounts yet' }), S.accts.length ? 'Try another number or name.' : 'Accounts appear here when customers sign up in the shop.')); return; }
     res.replaceChildren(el('div', { class: 'sub', style: 'margin-bottom:8px', text: `${S.accts.length} account${S.accts.length === 1 ? '' : 's'}` }),
-      el('div', { class: 'clist' }, ...list.slice(0, 300).map(a => {
+      el('div', { class: 'clist' + (list.length > 150 ? ' big' : '') }, ...list.map(a => {
         const d = acctIdent(a.login);
         return el('button', { class: 'crow acct-row', type: 'button', 'data-id': a.user_id, onclick: () => acctSheet(a) },
-          el('span', { class: 'acct-ic', text: d.icon }),
-          el('div', {}, el('div', { class: 'nm', text: (a.name || d.id) + (a.linked ? ' 🔗' : '') }), el('div', { class: 'meta' }, a.name ? d.id + ' ' : '', el('span', { class: 'vtag' + (a.verified ? ' ok' : ''), text: a.verified ? '✓ Verified' : 'Unverified' }))),
+          avatar({ name: a.name || d.id, photo: (acctCust(a) || {}).photo || '' }),
+          el('div', {}, el('div', { class: 'nm', text: (a.name || d.id) + (a.linked ? ' 🔗' : '') }), el('div', { class: 'meta' }, d.icon + ' ' + (a.name ? d.id + ' ' : ''), el('span', { class: 'vtag' + (a.verified ? ' ok' : ''), text: a.verified ? '✓ Verified' : 'Unverified' }))),
           el('div', { class: 'meta', style: 'text-align:right' }, a.orders ? `${a.orders} order${a.orders == 1 ? '' : 's'}` : 'No orders', el('br'), 'joined ' + dateShort(Date.parse(a.created_at))));
       })));
   }
@@ -1599,7 +1689,11 @@ function acctSheet(a) {
     } }, a.verified ? 'Mark unverified' : 'Mark verified'));
   drawV();
   const row = (k, v) => el('div', { class: 'od-row' }, el('span', { class: 'sub', text: k }), el('b', { text: v }));
+  const tgt = acctCust(a);
+  const pic = tgt ? el('div', { id: 'as-pic' }, picEditor(tgt.name || d.id, tgt.photo, ch => { setCustPhoto(tgt.id, ch).then(ok => { if (ok) refresh(); }); }))
+    : el('div', { class: 'sub', id: 'as-pic', text: 'A photo can be added after their first order.' });
   openModal(el('div', { class: 'sheet' },
+    pic,
     el('h2', { text: d.icon + ' ' + d.id }),
     a.name ? el('div', { class: 'sub', text: a.linked ? 'Linked to ' + a.name : 'Typed at checkout: ' + a.name }) : null, vbox,
     el('section', { class: 'od-sect' }, row('Joined', when(a.created_at)), row('Last sign in', when(a.last_sign_in_at)),
@@ -1626,7 +1720,7 @@ function customerResults(root) {
   const list = all.filter(c => !q || [c.name, c.phone, c.address].some(x => (x || '').toLowerCase().includes(q)))
     .sort((a, b) => ((stats.get(b.id) || {}).last || 0) - ((stats.get(a.id) || {}).last || 0) || (a.name || '').localeCompare(b.name || ''));
   if (!list.length) { root.append(el('div', { class: 'empty' }, el('b', { text: all.length ? 'No one matches' : 'No customers yet' }), all.length ? 'Try another word.' : 'Customers are added automatically when you save an order with a name or phone number.')); return; }
-  root.append(el('div', { class: 'clist' }, list.slice(0, 300).map(c => {
+  root.append(el('div', { class: 'clist' + (list.length > 150 ? ' big' : '') }, list.map(c => {
     const s = stats.get(c.id);
     return el('button', { class: 'crow', type: 'button', onclick: () => customerModal(c) },
       avatar(c),
@@ -1641,12 +1735,20 @@ function customerModal(c) {
   const hist = c ? S.orders.filter(o => o.customerId === c.id).sort((a, b) => b.createdAt - a.createdAt).slice(0, 8) : [];
   const field = (id, label, key, tag, attrs) => el('div', { class: 'field' }, el('label', { for: id, text: label }),
     el(tag || 'input', Object.assign({ id, value: m[key] || '', oninput: e => { m[key] = e.target.value; } }, attrs)));
+  let newBlob = null, removed = false;
+  const picBox = picEditor(m.name, c && c.photo, ch => { if (ch.blob) { newBlob = ch.blob; removed = false; } else { newBlob = null; removed = true; } });
   async function save() {
     if (!(m.name || '').trim() && !(m.phone || '').trim()) return toast('Add a name or phone number.', true);
-    const rec = { id: c ? c.id : newId(), name: (m.name || '').trim() || 'Customer', phone: (m.phone || '').trim(), address: (m.address || '').trim(), notes: (m.notes || '').trim(), photo: c ? (c.photo || '') : '', createdAt: c ? (c.createdAt || Date.now()) : Date.now() };
-    if (await write(Store.put('customers', rec), 'Saved')) closeModal();
+    let photo = removed ? '' : (c ? (c.photo || '') : '');
+    if (newBlob) {
+      photo = `${S.uid}/cust-${newId()}.${newBlob.type === 'image/webp' ? 'webp' : 'jpg'}`;
+      try { await queuePhoto(photo, newBlob); } catch (_) { return toast('Could not store the photo on this device.', true); }
+    }
+    const extra = c && c.photo && c.photo !== photo ? photoDelOp(c.photo) : [];
+    const rec = { id: c ? c.id : newId(), name: (m.name || '').trim() || 'Customer', phone: (m.phone || '').trim(), address: (m.address || '').trim(), notes: (m.notes || '').trim(), photo, photoTouched: !!(photo || (c && c.photoTouched)), createdAt: c ? (c.createdAt || Date.now()) : Date.now() };
+    if (await write(Store.put('customers', rec, extra), 'Saved')) closeModal();
   }
-  openModal(el('div', { class: 'sheet' }, c ? el('div', { class: 'who-head' }, avatar(c, 'big'), el('h2', { text: c.name })) : el('h2', { text: 'Add customer' }),
+  openModal(el('div', { class: 'sheet' }, c ? el('div', { class: 'who-head' }, picBox, el('h2', { text: c.name })) : el('h2', { text: 'Add customer' }), c ? null : picBox,
     s ? el('div', { class: 'tiles', style: 'margin:0' }, tile('Orders', s.n), tile('Spent', money(s.spent)), tile('Last order', ago(s.last))) : null,
     favs.length ? el('div', {}, el('div', { class: 'sub', style: 'margin-bottom:6px', text: 'Usually orders' }), el('div', { class: 'favs' }, favs.map(([n, q]) => el('span', { class: 'tag', text: `${n} ×${q}` })))) : null,
     el('div', { class: 'row' }, field('k-name', 'Name', 'name'), field('k-phone', 'Phone', 'phone', null, { type: 'tel', inputmode: 'tel' })),
