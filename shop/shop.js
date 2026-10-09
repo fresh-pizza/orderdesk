@@ -11,7 +11,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   phoneDomain: 'phone.orderdesk.app', // phone logins are stored as <digits>@this, no SMS involved
 };
-const SHOP_VERSION = '1.0.0';
+const SHOP_VERSION = '1.1.0';
 
 /* ---------- helpers ---------- */
 function el(tag, props, ...kids) {
@@ -60,7 +60,7 @@ function dayLabel(day) {
 
 /* ---------- state ---------- */
 const S = {
-  biz: { name: '', currency: '¥', addresses: [] }, menu: [], cat: 'All', view: 'menu',
+  biz: { name: '', currency: '¥', addresses: [], pay: {} }, menu: [], cat: 'All', view: 'menu',
   basket: store.get('basket', []), // [{menuId, variant, qty}]
   draft: Object.assign({ type: 'delivery', address: '', slotDate: '', slot: '', note: '', name: '', phone: '' }, store.get('draft', {})),
   session: null, orders: [], lastOrder: null, loaded: false, loadErr: '',
@@ -224,7 +224,7 @@ function viewCheckout(root) {
       el('div', { class: 'sumrow' }, el('span', { text: 'Items' }), el('span', { text: money(sub) })),
       d.type === 'delivery' ? el('div', { class: 'sumrow' }, el('span', { text: 'Delivery' + (d.address ? ' · ' + d.address : '') }), el('span', { text: d.address ? feeText(fee) : '–' })) : null,
       el('div', { class: 'sumrow total' }, el('span', { text: 'Total' }), el('span', { id: 'c-total', text: money(sub + fee) })),
-      el('div', { class: 'fineprint', text: 'You pay by WeChat Pay or Alipay after placing the order. We start cooking once payment is confirmed. To change or cancel an order, message us on WeChat.' }),
+      el('div', { class: 'fineprint', text: 'You pay by WeChat Pay or Alipay right after placing the order. We start cooking once payment is confirmed. To change or cancel an order, message us on WeChat.' }),
       err,
       el('button', { class: 'btn primary big-btn', type: 'button', id: 'c-place', disabled: clash, onclick: () => placeOrder(err) }, S.session ? 'Place order' : 'Continue')));
 }
@@ -245,6 +245,7 @@ async function placeOrder(err) {
     S.lastOrder = data; S.basket = []; d.note = ''; saveBasket();
     S.orders = [data, ...S.orders.filter(o => o.id !== data.id)];
     go('done');
+    payModal(data); // ask them to pay straight away
   } catch (e) { err.textContent = niceErr(e); btn.disabled = false; btn.textContent = 'Place order'; }
 }
 
@@ -317,47 +318,106 @@ async function shrink(file) {
   cv.getContext('2d').drawImage(src, 0, 0, cv.width, cv.height);
   return new Promise(r => cv.toBlob(r, 'image/jpeg', 0.8));
 }
+const PAYWAYS = {
+  wechat: { base: 'wechat', title: 'WeChat Pay QR', hint: 'Scan our QR code' },
+  alipay: { base: 'alipay', title: 'Alipay QR', hint: 'Scan our QR code' },
+  wechat_chat: { base: 'wechat', title: 'Pay in WeChat chat', hint: 'Send the money to us in WeChat' },
+  alipay_chat: { base: 'alipay', title: 'Pay in Alipay chat', hint: 'Transfer to us in Alipay' },
+};
+const APP = { wechat: 'WeChat', alipay: 'Alipay' };
+function payLogo(m) {
+  const b = (PAYWAYS[m] || {}).base || m;
+  if (b !== 'wechat' && b !== 'alipay') return null;
+  return el('img', { class: 'paylogo', src: `../pay-${b}.png`, alt: '', onerror: e => e.target.replaceWith(el('span', { class: 'paylogo fb ' + b })) });
+}
 function payBox(o) {
   if (o.status === 'cancelled') return null;
   if (o.paid) return el('div', { class: 'paybox ok' }, el('b', { text: '✓ Payment confirmed' }));
-  if (o.pay_submitted_at) return el('div', { class: 'paybox' }, el('b', { text: 'Screenshot sent' }), el('span', { class: 'fineprint', text: 'We are checking your payment. You can send a new screenshot if needed.' }),
-    el('button', { class: 'btn small', type: 'button', onclick: () => payModal(o) }, 'Send a new screenshot'));
+  const w = PAYWAYS[o.pay_method];
+  if (o.pay_submitted_at) return el('div', { class: 'paybox' },
+    el('b', {}, payLogo(o.pay_method), o.pay_proof ? 'Screenshot sent' : `You paid in ${APP[w ? w.base : 'wechat']} chat`),
+    el('span', { class: 'fineprint', text: 'We are checking your payment and start cooking once it is confirmed.' }),
+    el('button', { class: 'btn small', type: 'button', onclick: () => payModal(o) }, 'Change or send a screenshot'));
   return el('div', { class: 'paybox' }, el('b', { text: `Please pay ${money(o.total)}` }),
-    el('span', { class: 'fineprint', text: 'Pay with WeChat Pay or Alipay, then send us the screenshot here. We start cooking once it is confirmed.' }),
-    el('button', { class: 'btn primary', type: 'button', id: 'pay-' + o.no, onclick: () => payModal(o) }, 'I have paid – send screenshot'));
+    el('span', { class: 'fineprint', text: 'We start cooking once your payment is confirmed.' }),
+    el('button', { class: 'btn primary', type: 'button', id: 'pay-' + o.no, onclick: () => payModal(o) }, 'Pay now'));
 }
+async function saveQr(path, name) {
+  try {
+    const r = await fetch(publicUrl(path)); if (!r.ok) throw new Error();
+    const u = URL.createObjectURL(await r.blob());
+    const a = el('a', { href: u, download: name }); document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(u), 4000);
+  } catch (_) { toast('Could not save it. Long-press the code or take a screenshot instead.', true); }
+}
+function copyText(t) {
+  const done = () => toast('Copied');
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(done, () => toast('Long-press to copy it.', true));
+  else toast('Long-press to copy it.', true);
+}
+/* paying: pick one of four ways, then a QR + screenshot, or "I've paid" for chat */
 function payModal(o) {
-  let method = o.pay_method || 'wechat', blob = null, prev = '';
-  const err = el('div', { class: 'err', role: 'alert' });
-  const shot = el('div', { style: 'display:flex;flex-direction:column;gap:8px;align-items:flex-start' });
-  const seg = el('div', { class: 'seg', role: 'group', 'aria-label': 'Paid with' });
-  const drawSeg = () => seg.replaceChildren(...[['wechat', 'WeChat Pay'], ['alipay', 'Alipay']].map(([k, l]) => el('button', { type: 'button', 'aria-pressed': method === k, onclick: () => { method = k; drawSeg(); } }, l)));
-  const drawShot = () => shot.replaceChildren(prev ? el('img', { class: 'shot-prev', src: prev, alt: 'Your screenshot' }) : null,
-    el('label', { class: 'btn', style: 'text-align:center' }, prev ? 'Choose another screenshot' : 'Choose screenshot',
-      el('input', { type: 'file', accept: 'image/*', id: 'pay-file', style: 'display:none', onchange: async e => {
-        const f = e.target.files && e.target.files[0]; if (!f) return;
-        try { blob = await shrink(f); prev = URL.createObjectURL(blob); drawShot(); } catch (x) { err.textContent = niceErr(x); }
-      } })));
-  drawSeg(); drawShot();
-  openModal(el('div', { class: 'sheet' }, el('h2', { text: `Payment for order #${pad3(o.no)}` }),
-    el('div', { class: 'sub', text: `Amount: ${money(o.total)}` }),
-    el('div', { class: 'field' }, el('label', { text: 'Paid with' }), seg),
-    el('div', { class: 'field' }, el('label', { text: 'Payment screenshot' }), shot), err,
-    el('div', { class: 'actions' }, el('button', { class: 'btn', type: 'button', onclick: closeModal }, 'Cancel'),
-      el('button', { class: 'btn primary', type: 'button', id: 'pay-send', onclick: async e => {
-        if (!blob) { err.textContent = 'Choose the screenshot first.'; return; }
-        e.target.disabled = true; err.textContent = '';
-        try {
-          const path = `${S.session.user.id}/receipt-${newId()}.jpg`;
-          const up = await sb.storage.from('receipts').upload(path, blob, { contentType: 'image/jpeg', upsert: false });
-          if (up.error) throw up.error;
-          const { error } = await sb.rpc('submit_payment', { order_id: o.id, proof: path, method });
-          if (error) throw error;
-          closeModal(); toast('Screenshot sent. Thank you!'); await loadOrders();
-          if (S.lastOrder && S.lastOrder.id === o.id) S.lastOrder = S.orders.find(x => x.id === o.id) || S.lastOrder;
-          render();
-        } catch (x) { err.textContent = niceErr(x); e.target.disabled = false; }
-      } }, 'Send'))));
+  const P = S.biz.pay || {};
+  const ways = Object.keys(PAYWAYS).filter(k => (k === 'wechat' ? P.wechatQr : k === 'alipay' ? P.alipayQr : true));
+  let way = PAYWAYS[o.pay_method] && ways.includes(o.pay_method) && o.pay_submitted_at ? o.pay_method : '', blob = null, prev = '';
+  const sheet = el('div', { class: 'sheet paysheet' });
+  const pickShot = (err, onPick) => el('label', { class: 'btn', style: 'text-align:center' }, prev ? 'Choose another screenshot' : 'Choose screenshot',
+    el('input', { type: 'file', accept: 'image/*', id: 'pay-file', style: 'display:none', onchange: async e => {
+      const f = e.target.files && e.target.files[0]; if (!f) return;
+      try { blob = await shrink(f); if (prev) URL.revokeObjectURL(prev); prev = URL.createObjectURL(blob); onPick(); } catch (x) { err.textContent = niceErr(x); }
+    } }));
+  function drawChoose() {
+    sheet.replaceChildren(el('h2', { text: `Pay ${money(o.total)}` }), el('div', { class: 'sub', text: `Order #${pad3(o.no)} · choose how you pay` }),
+      el('div', { class: 'payways' }, ways.map(k => el('button', { class: 'payway', type: 'button', id: 'way-' + k, onclick: () => { way = k; drawWay(); } },
+        payLogo(k), el('span', {}, el('b', { text: PAYWAYS[k].title }), el('small', { text: PAYWAYS[k].hint })), el('span', { class: 'chev', text: '›' })))),
+      el('div', { class: 'actions' }, el('button', { class: 'btn', type: 'button', onclick: closeModal }, 'Pay later')));
+  }
+  function drawWay() {
+    const w = PAYWAYS[way], isQr = !way.endsWith('_chat'), app = APP[w.base];
+    const err = el('div', { class: 'err', role: 'alert' });
+    const shot = el('div', { class: 'shotbox' });
+    const drawShot = () => shot.replaceChildren(...[prev ? el('img', { class: 'shot-prev', src: prev, alt: 'Your screenshot' }) : null, pickShot(err, drawShot)].filter(Boolean));
+    drawShot();
+    const qrPath = w.base === 'wechat' ? P.wechatQr : P.alipayQr, acct = w.base === 'wechat' ? P.wechatId : P.alipayId;
+    const how = isQr
+      ? [el('div', { class: 'qrwrap' }, el('img', { class: 'qr', src: publicUrl(qrPath), alt: `${w.title} code` })),
+        el('button', { class: 'btn small', type: 'button', style: 'align-self:center', onclick: () => saveQr(qrPath, `${w.base}-pay.jpg`) }, 'Save QR to photos'),
+        el('ol', { class: 'howto' },
+          el('li', { text: 'Long-press the code, or save it to your photos.' }),
+          el('li', { text: `In ${app}: Scan → pick the picture from your album → pay ${money(o.total)}.` }),
+          el('li', { text: 'Send us the payment screenshot below.' }))]
+      : [el('ol', { class: 'howto' },
+          el('li', {}, `Send ${money(o.total)} to us in ${app} chat`, acct ? '' : '.'),
+          acct ? el('li', { class: 'acct' }, el('span', { text: `${w.base === 'wechat' ? 'WeChat ID' : 'Alipay account'}: ` }), el('b', { text: acct }),
+            el('button', { class: 'link', type: 'button', onclick: () => copyText(acct) }, 'Copy')) : null,
+          el('li', { text: 'Tap "I have paid". A screenshot helps us confirm faster (optional).' }))];
+    sheet.replaceChildren(
+      el('div', { class: 'payhead' }, payLogo(way), el('h2', { text: w.title })),
+      el('div', { class: 'amount', text: money(o.total) }),
+      ...how,
+      el('div', { class: 'field' }, el('label', { text: isQr ? 'Payment screenshot' : 'Screenshot (optional)' }), shot), err,
+      el('div', { class: 'actions' },
+        el('button', { class: 'btn left', type: 'button', onclick: () => { blob = null; drawChoose(); } }, '‹ Other ways'),
+        el('button', { class: 'btn primary', type: 'button', id: 'pay-send', onclick: async e => {
+          if (isQr && !blob) { err.textContent = 'Choose the payment screenshot first.'; return; }
+          e.currentTarget.disabled = true; const btn = e.currentTarget; err.textContent = '';
+          try {
+            let path = '';
+            if (blob) {
+              path = `${S.session.user.id}/receipt-${newId()}.jpg`;
+              const up = await sb.storage.from('receipts').upload(path, blob, { contentType: 'image/jpeg', upsert: false });
+              if (up.error) throw up.error;
+            }
+            const { error } = await sb.rpc('submit_payment', { order_id: o.id, proof: path, method: way });
+            if (error) throw error;
+            closeModal(); toast(path ? 'Screenshot sent. Thank you!' : 'Thank you! We will confirm your payment.'); await loadOrders();
+            if (S.lastOrder && S.lastOrder.id === o.id) S.lastOrder = S.orders.find(x => x.id === o.id) || S.lastOrder;
+            render();
+          } catch (x) { err.textContent = niceErr(x); btn.disabled = false; }
+        } }, isQr ? 'Send screenshot' : 'I have paid')));
+  }
+  if (way) drawWay(); else drawChoose();
+  openModal(sheet);
 }
 const pad3 = n => String(n || 0).padStart(3, '0');
 
@@ -417,11 +477,12 @@ function listen() {
 async function loadShop() {
   try {
     const [st, mn] = await Promise.all([
-      sb.from('settings').select('name,currency,addresses').eq('id', 'business'),
+      sb.from('settings').select('*').eq('id', 'business'),
       sb.from('menu').select('id,name,category,description,variants,photo,available,windows').eq('deleted', false)]);
     if (st.error) throw st.error; if (mn.error) throw mn.error;
     const b = (st.data || [])[0] || {};
-    S.biz = { name: b.name || '', currency: b.currency ?? '¥', addresses: Array.isArray(b.addresses) ? b.addresses : [] };
+    S.biz = { name: b.name || '', currency: b.currency ?? '¥', addresses: Array.isArray(b.addresses) ? b.addresses : [],
+      pay: { wechatQr: b.pay_wechat_qr || '', alipayQr: b.pay_alipay_qr || '', wechatId: b.pay_wechat_id || '', alipayId: b.pay_alipay_id || '' } };
     S.menu = mn.data || [];
     S.basket = S.basket.filter(l => dish(l.menuId));
     S.loaded = true; S.loadErr = '';

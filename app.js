@@ -9,9 +9,9 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   bucket: 'photos',
 };
-const VERSION = '2.1.0';
+const VERSION = '2.2.0';
 const COLLS = ['menu', 'customers', 'orders', 'settings', 'purchases'];
-const DEFAULT_SETTINGS = { id: 'main', name: 'My kitchen', currency: '¥', deliveryFee: 0, addresses: [] };
+const DEFAULT_SETTINGS = { id: 'main', name: 'My kitchen', currency: '¥', deliveryFee: 0, addresses: [], wechatQr: '', alipayQr: '', wechatId: '', alipayId: '' };
 
 /* ---------- tiny helpers ---------- */
 function el(tag, props, ...kids) {
@@ -101,7 +101,14 @@ const IDB = (() => {
 
 /* ---------- app state ---------- */
 const ST = { new: 'Received', cooking: 'Received', accepted: 'Accepted', ready: 'Ready', done: 'Done', cancelled: 'Cancelled' };
-const PAY = { wechat: 'WeChat Pay', alipay: 'Alipay' };
+const PAY = { wechat: 'WeChat Pay', alipay: 'Alipay', wechat_chat: 'WeChat chat', alipay_chat: 'Alipay chat' };
+const payBase = m => String(m || '').replace('_chat', '');
+/* the WeChat Pay / Alipay logo; a coloured dot if the picture can't load */
+function payLogo(m) {
+  const b = payBase(m);
+  if (b !== 'wechat' && b !== 'alipay') return null;
+  return el('img', { class: 'paylogo', src: `pay-${b}.png`, alt: b === 'wechat' ? 'WeChat Pay' : 'Alipay', onerror: e => e.target.replaceWith(el('span', { class: 'paylogo fb ' + b })) });
+}
 const isCancelled = o => o.status === 'cancelled';
 const isUnpaid = o => !isCancelled(o) && !o.paid;
 const M = { menu: new Map(), customers: new Map(), orders: new Map(), settings: new Map(), purchases: new Map() };
@@ -204,9 +211,11 @@ const MAP = {
   },
   settings: {
     to: r => Object.assign({ id: 'business', name: r.name || 'My kitchen', currency: r.currency ?? '¥', delivery_fee: num(r.deliveryFee), deleted: false },
-      r.addrTouched ? { addresses: r.addresses || [] } : {}),
+      r.addrTouched ? { addresses: r.addresses || [] } : {},
+      r.payCfgTouched ? { pay_wechat_qr: r.wechatQr || '', pay_alipay_qr: r.alipayQr || '', pay_wechat_id: r.wechatId || '', pay_alipay_id: r.alipayId || '' } : {}),
     // one shared settings row for the whole team; older per-login rows are ignored
-    from: x => ({ id: x.id === 'business' ? 'main' : '__other', name: x.name, currency: x.currency, deliveryFee: num(x.delivery_fee), addresses: Array.isArray(x.addresses) ? x.addresses : [], addrTouched: x.addresses !== undefined, deleted: false }),
+    from: x => ({ id: x.id === 'business' ? 'main' : '__other', name: x.name, currency: x.currency, deliveryFee: num(x.delivery_fee), addresses: Array.isArray(x.addresses) ? x.addresses : [], addrTouched: x.addresses !== undefined,
+      wechatQr: x.pay_wechat_qr || '', alipayQr: x.pay_alipay_qr || '', wechatId: x.pay_wechat_id || '', alipayId: x.pay_alipay_id || '', payCfgTouched: x.pay_wechat_qr !== undefined, deleted: false }),
   },
 };
 
@@ -550,8 +559,8 @@ function stepText(o) {
 }
 function payPill(o) {
   if (isCancelled(o)) return el('span', { class: 'pill cancelled', text: 'Cancelled' });
-  if (!o.paid && o.paySubmittedAt) return el('span', { class: 'pill check', text: 'Check payment' });
-  return o.paid ? el('span', { class: 'pill paid', text: 'Paid' + (PAY[o.payMethod] ? ' · ' + PAY[o.payMethod].replace(' Pay', '') : '') })
+  if (!o.paid && o.paySubmittedAt) return el('span', { class: 'pill check' }, payLogo(o.payMethod), o.payProof ? 'Check payment' : 'Check chat');
+  return o.paid ? el('span', { class: 'pill paid' }, payLogo(o.payMethod), 'Paid')
     : el('span', { class: 'pill unpaid', text: 'Unpaid' });
 }
 function itemLines(o) {
@@ -573,7 +582,7 @@ function ticket(o) {
   } else {
     const nx = nextStep(o);
     if (nx) acts.push(el('button', { class: 'btn small primary', type: 'button', onclick: e => { e.stopPropagation(); setStatus(o, nx[0]); } }, nx[1]));
-    else acts.push(el('span', { class: 'paid-note', text: '✓ ' + (PAY[o.payMethod] || 'Paid') + (o.payProof ? ' · screenshot' : '') }));
+    else acts.push(el('span', { class: 'paid-note' }, '✓ ', payLogo(o.payMethod), (PAY[o.payMethod] || 'Paid') + (o.payProof ? ' · screenshot' : '')));
   }
   return el('article', { class: 'ticket ' + (isCancelled(o) ? 't-cancelled' : o.paid ? 't-paid' : 't-unpaid'), 'data-id': o.id, tabindex: '0',
     onclick: () => orderSheet(o), onkeydown: e => { if (e.key === 'Enter') orderSheet(o); } },
@@ -604,15 +613,18 @@ function orderSheet(o0) {
   }
   const payPart = isCancelled(o) ? null : o.paid
     ? el('div', { class: 'sect' }, el('h3', { text: 'Payment' }),
-      el('div', {}, `Paid with ${PAY[o.payMethod] || 'unknown'}`, o.paidAt ? el('span', { class: 'sub', text: ' · ' + dateShort(o.paidAt) + ' ' + timeStr(o.paidAt) }) : null),
+      el('div', {}, 'Paid with ', payLogo(o.payMethod), PAY[o.payMethod] || 'unknown', o.paidAt ? el('span', { class: 'sub', text: ' · ' + dateShort(o.paidAt) + ' ' + timeStr(o.paidAt) }) : null),
       img,
       el('div', { class: 'btns' },
         el('button', { class: 'btn small', type: 'button', onclick: () => payModal(o) }, 'Change payment'),
         confirmBtn('Mark unpaid', o.payProof ? 'Unpaid + remove screenshot?' : 'Mark unpaid?', async () => {
           if (await write(Store.put('orders', Object.assign({}, o, { paid: false, payMethod: '', payProof: '', paidAt: 0, payTouched: true }), photoDelOp(o.payProof)), 'Marked unpaid')) closeModal();
         })))
-    : el('div', { class: 'sect' }, el('h3', { text: 'Payment' }), el('div', { class: 'sub', text: 'Not paid yet.' }),
-      el('div', { class: 'btns' }, el('button', { class: 'btn pay', type: 'button', onclick: () => payModal(o) }, 'Mark paid')));
+    : el('div', { class: 'sect' }, el('h3', { text: 'Payment' }),
+      o.paySubmittedAt ? el('div', {}, 'Client says paid · ', payLogo(o.payMethod), (String(o.payMethod).endsWith('_chat') ? 'in ' : '') + (PAY[o.payMethod] || 'unknown'),
+        el('span', { class: 'sub', text: ' · ' + dateShort(o.paySubmittedAt) + ' ' + timeStr(o.paySubmittedAt) })) : el('div', { class: 'sub', text: 'Not paid yet.' }),
+      o.paySubmittedAt && o.payProof ? img : null,
+      el('div', { class: 'btns' }, el('button', { class: 'btn pay', type: 'button', onclick: () => payModal(o) }, o.paySubmittedAt ? 'Confirm paid' : 'Mark paid')));
   openModal(el('div', { class: 'sheet' },
     el('div', { class: 'od-head' }, el('h2', { text: `Order ${orderNo(o.no)}` }), payPill(o)),
     el('div', { class: 'sub', text: `${o.source === 'shop' ? 'Ordered in the shop' : 'Taken'} ${dateShort(o.createdAt)} ${timeStr(o.createdAt)} · ${o.type === 'delivery' ? 'Delivery' : 'Pickup'}` }),
@@ -638,8 +650,8 @@ function payModal(o0) {
   const seg = el('div', { class: 'seg', role: 'group', 'aria-label': 'Paid with' });
   const shot = el('div', { class: 'photo-edit' });
   const status = el('div', { class: 'sub' });
-  const drawSeg = () => seg.replaceChildren(...Object.entries(PAY).map(([k, label]) =>
-    el('button', { type: 'button', 'aria-pressed': method === k, onclick: () => { method = k; drawSeg(); } }, label)));
+  const drawSeg = () => seg.replaceChildren(...[['wechat', 'WeChat Pay'], ['alipay', 'Alipay']].map(([k, label]) =>
+    el('button', { type: 'button', 'aria-pressed': payBase(method) === k, onclick: () => { if (payBase(method) !== k) method = k; drawSeg(); } }, payLogo(k), label)));
   async function drawShot() {
     const src = blob ? preview : (keepOld && o.payProof ? await receiptSrc(o.payProof) : '');
     shot.replaceChildren(src ? el('img', { class: 'receipt-thumb', src, alt: '' }) : el('div', { class: 'ph', style: '--h:40', text: '🧾' }),
@@ -1418,6 +1430,28 @@ function settingsModal() {
     el('button', { class: 'x', type: 'button', 'aria-label': 'Remove address', onclick: () => { addrs.splice(i, 1); drawAddrs(); } }, '✕'))),
     ...(addrs.length ? [] : [el('div', { class: 'sub', text: 'No addresses yet.' })]));
   drawAddrs();
+  // payment: QR codes + accounts the shop shows to clients
+  const qr = { wechat: { path: s.wechatQr || '', blob: null, prev: '' }, alipay: { path: s.alipayQr || '', blob: null, prev: '' } };
+  let payChanged = false;
+  const payBlock = (k, title, idKey, idLabel, idHint) => {
+    const box = el('div', { class: 'qr-edit' });
+    const draw = () => {
+      const q = qr[k], src = q.blob ? q.prev : (q.path ? photoUrl(q.path) : '');
+      box.replaceChildren(src ? el('img', { class: 'qr-thumb', src, alt: title + ' QR code' }) : el('div', { class: 'qr-thumb empty', text: 'No QR' }),
+        el('div', { style: 'display:flex;flex-direction:column;gap:6px;align-items:flex-start' },
+          el('label', { class: 'btn small' }, src ? 'Change QR' : 'Upload QR',
+            el('input', { type: 'file', accept: 'image/*', id: 's-qr-' + k, style: 'display:none', onchange: async e => {
+              const file = e.target.files && e.target.files[0]; if (!file) return;
+              try { q.blob = await shrinkPhoto(file, 1000, false); if (q.prev) URL.revokeObjectURL(q.prev); q.prev = URL.createObjectURL(q.blob); payChanged = true; draw(); }
+              catch (err) { toast((err && err.message) || 'Could not read that picture.', true); }
+            } })),
+          src ? el('button', { class: 'link', type: 'button', onclick: () => { q.blob = null; q.path = ''; payChanged = true; draw(); } }, 'Remove') : null));
+    };
+    draw();
+    return el('div', { class: 'pay-cfg' }, el('div', { class: 'pay-h' }, payLogo(k), el('b', { text: title })), box,
+      el('div', { class: 'field' }, el('label', { for: 's-' + idKey, text: idLabel }),
+        el('input', { id: 's-' + idKey, value: s[idKey] || '', placeholder: idHint, autocomplete: 'off', oninput: e => { s[idKey] = e.target.value; payChanged = true; } })));
+  };
   const f = (id, label, key, attrs) => el('div', { class: 'field' }, el('label', { for: id, text: label }), el('input', Object.assign({ id, value: s[key], oninput: e => { s[key] = e.target.value; } }, attrs)));
   const n = Sync.waiting();
   openModal(el('div', { class: 'sheet' }, el('h2', { text: 'Settings' }),
@@ -1426,14 +1460,31 @@ function settingsModal() {
     el('div', { class: 'sect' }, el('h3', { text: 'Delivery addresses' }),
       el('div', { class: 'sub', text: 'Only these can be picked for a delivery. Fee 0 = free delivery.' }),
       abox, el('button', { class: 'link', type: 'button', style: 'align-self:flex-start', onclick: () => { addrs.push({ id: newId(), name: '', fee: '', was: '' }); drawAddrs(); const ins = abox.querySelectorAll('.addr-row input:not([type=number])'); if (ins.length) ins[ins.length - 1].focus(); } }, '+ Add address')),
+    el('div', { class: 'sect' }, el('h3', { text: 'Payment' }),
+      el('div', { class: 'sub', text: 'Clients see these when they pay in the shop.' }),
+      el('div', { class: 'pay-cfgs' },
+        payBlock('wechat', 'WeChat Pay', 'wechatId', 'WeChat ID (for paying in chat)', 'your WeChat ID'),
+        payBlock('alipay', 'Alipay', 'alipayId', 'Alipay account (for paying in chat)', 'phone or email'))),
     el('div', { class: 'actions' }, el('button', { class: 'btn', type: 'button', onclick: closeModal }, 'Close'),
       el('button', { class: 'btn primary', type: 'button', id: 's-save', onclick: async () => {
         const clean = addrs.map(a => ({ id: a.id, name: (a.name || '').trim(), fee: Math.max(0, Number(a.fee) || 0), was: a.was })).filter(a => a.name);
         const names = clean.map(a => a.name.toLowerCase());
         if (new Set(names).size !== names.length) return toast('Two addresses have the same name.', true);
         const rec = { id: 'main', name: (s.name || '').trim() || 'My kitchen', currency: s.currency || '', deliveryFee: num(S.settings.deliveryFee),
-          addresses: clean.map(({ id, name, fee }) => ({ id, name, fee })), addrTouched: true };
-        if (!await write(Store.put('settings', rec), 'Settings saved')) return;
+          addresses: clean.map(({ id, name, fee }) => ({ id, name, fee })), addrTouched: true,
+          wechatQr: qr.wechat.path, alipayQr: qr.alipay.path, wechatId: (s.wechatId || '').trim(), alipayId: (s.alipayId || '').trim(),
+          payCfgTouched: !!(S.settings.payCfgTouched || payChanged) };
+        const extra = [];
+        for (const k of ['wechat', 'alipay']) {
+          const q = qr[k], old = S.settings[k + 'Qr'] || '';
+          if (q.blob) {
+            const path = `${S.uid}/payqr-${k}-${newId()}.jpg`;
+            try { await queuePhoto(path, q.blob); } catch (_) { return toast('Could not store the QR picture on this device.', true); }
+            rec[k + 'Qr'] = path;
+          }
+          if (old && old !== rec[k + 'Qr']) extra.push(...photoDelOp(old));
+        }
+        if (!await write(Store.put('settings', rec, extra), 'Settings saved')) return;
         // a renamed address follows the customers who use it
         for (const a of clean) if (a.was && a.was !== a.name) for (const c of S.customers.filter(x => x.address === a.was)) await Store.patch('customers', c.id, { address: a.name });
         closeModal();

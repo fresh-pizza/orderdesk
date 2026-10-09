@@ -68,3 +68,27 @@ body.shop{padding-bottom:calc(84px + env(safe-area-inset-bottom,0px))}
   .cat-h{margin:12px 0 2px}
 }
 @media (min-width:720px){.dishes{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}}
+
+/* 2.2: paying — four ways, QR, logos */
+.paylogo{display:inline-block;width:1.15em;height:1.15em;vertical-align:-.22em;margin-right:5px;object-fit:contain;flex:none}
+.paylogo.fb{border-radius:50%;width:.8em;height:.8em;vertical-align:-.05em}
+.paylogo.fb.wechat{background:#1AAD19}
+.paylogo.fb.alipay{background:#1677FF}
+.payways{display:flex;flex-direction:column;gap:8px}
+.payway{display:flex;align-items:center;gap:12px;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px;text-align:left;color:var(--ink);width:100%}
+.payway .paylogo{width:34px;height:34px;margin:0}
+.payway span{display:flex;flex-direction:column;min-width:0;flex:1}
+.payway small{color:var(--muted);font-size:13px}
+.payway .chev{flex:none;color:var(--muted);font-size:22px}
+.payhead{display:flex;align-items:center;gap:8px}
+.payhead h2{margin:0}
+.payhead .paylogo{width:28px;height:28px;margin:0}
+.paysheet .amount{font-family:var(--font-mono);font-size:26px;font-weight:700;text-align:center}
+.qrwrap{display:flex;justify-content:center}
+.qr{width:min(260px,70vw);height:auto;background:#fff;border-radius:10px;border:1px solid var(--line);padding:6px}
+.howto{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:4px;font-size:14px}
+.howto .acct{list-style:none;margin-left:-20px;background:var(--surface2);border-radius:8px;padding:8px 10px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.howto .acct b{font-family:var(--font-mono);overflow-wrap:anywhere}
+.howto .acct .link{margin-left:auto}
+.shotbox{display:flex;flex-direction:column;gap:8px;align-items:flex-start}
+.paybox b .paylogo{vertical-align:-.25em}

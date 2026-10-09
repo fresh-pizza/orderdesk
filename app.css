@@ -417,3 +417,18 @@ img.avatar{object-fit:cover;background:var(--surface2);display:block}
 .tag.shop{background:var(--accent-bg);color:var(--accent-ink)}
 .pill.check{background:var(--accent);color:var(--on-accent)}
 .stepnow{font-size:13px;font-weight:600;color:var(--leaf)}
+
+/* 2.2: WeChat Pay / Alipay logos and payment settings */
+.paylogo{display:inline-block;width:1.15em;height:1.15em;vertical-align:-.22em;margin-right:4px;object-fit:contain;flex:none}
+.paylogo.fb{border-radius:50%;width:.8em;height:.8em;vertical-align:-.05em}
+.paylogo.fb.wechat{background:#1AAD19}
+.paylogo.fb.alipay{background:#1677FF}
+.pill .paylogo{width:14px;height:14px;vertical-align:-3px}
+.seg button .paylogo{margin-right:6px}
+.pay-cfgs{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}
+.pay-cfg{border:1px solid var(--line);border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.pay-h{display:flex;align-items:center;gap:6px}
+.pay-h .paylogo{width:22px;height:22px;margin:0}
+.qr-edit{display:flex;gap:10px;align-items:center}
+.qr-thumb{width:88px;height:88px;object-fit:contain;border-radius:8px;border:1px solid var(--line);background:#fff;flex:none}
+.qr-thumb.empty{display:grid;place-items:center;color:var(--muted);font-size:12px;background:var(--surface2)}

@@ -1,7 +1,7 @@
 /* Order Desk service worker: keeps the app itself on the device so it opens with no internet. */
-const VERSION = 'od-2.1.0';
+const VERSION = 'od-2.2.0';
 const SHELL = ['./', 'index.html', 'app.css', 'app.js', 'supabase.js', 'manifest.webmanifest',
-  'icon-192.png', 'apple-touch-icon.png',
+  'icon-192.png', 'apple-touch-icon.png', 'pay-wechat.png', 'pay-alipay.png',
   'bricolage-grotesque-latin-600-normal.woff2', 'bricolage-grotesque-latin-700-normal.woff2',
   'hanken-grotesk-latin-400-normal.woff2', 'hanken-grotesk-latin-500-normal.woff2',
   'hanken-grotesk-latin-600-normal.woff2', 'ibm-plex-mono-latin-500-normal.woff2'];
