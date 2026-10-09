@@ -11,7 +11,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   phoneDomain: 'phone.orderdesk.app', // phone logins are stored as <digits>@this, no SMS involved
 };
-const SHOP_VERSION = '2.0.0';
+const SHOP_VERSION = '2.1.0';
 /* phones (WeChat especially) keep old copies of web pages; if a newer shop is online, reload it */
 (async function freshness() {
   try {
@@ -239,6 +239,24 @@ function whoAmI() {
 function forgetPerson() {
   S.session = null; S.orders = []; S.msgs = []; S.profile = null; S.acct = undefined; S.lastOrder = null; lastStatus.clear();
   Object.assign(S.draft, { name: '', phone: '', address: '', note: '' }); store.set('draft', S.draft);
+}
+/* the kitchen deleted this account: the phone must not stay "signed in" */
+async function checkAccountAlive(session) {
+  if (!sb || !(session || S.session) || navigator.onLine === false) return true;
+  try {
+    const { data, error } = await sb.auth.getUser();
+    if (data && data.user) return true;
+    const m = String((error && (error.message || error.code)) || '');
+    const gone = error && (error.status === 401 || error.status === 403 || /does not exist|sub claim|user_not_found|invalid.*(jwt|token)/i.test(m));
+    if (!gone) return true;   // offline or a hiccup: stay signed in
+  } catch (_) { return true; }
+  await removedSignOut();
+  return false;
+}
+async function removedSignOut() {
+  try { await sb.auth.signOut({ scope: 'local' }); } catch (_) { /* already gone */ }
+  forgetPerson(); S.view = S.view === 'done' || S.view === 'chat' ? 'menu' : S.view; render();
+  toast('Your account was removed. Please sign in again.', true);
 }
 async function signOutShop() { await sb.auth.signOut({ scope: 'local' }); forgetPerson(); render(); toast('Signed out'); }
 function viewMe(root) {
@@ -584,8 +602,16 @@ async function placeOrder(err) {
     lastStatus.set(data.id, data.status);
     Sound.play('placed');
     go('done');
-    payModal(data); // offer to pay now (Pay later is the first choice)
-  } catch (e) { err.textContent = niceErr(e); btn.disabled = false; btn.textContent = 'Place order'; }
+    payModal(data, true); // two buttons: Pay later, Pay now (opens the payment options)
+  } catch (e) {
+    const em = (e && e.message) || '';
+    // the account was deleted by the kitchen: the old login still opens the door, the database refuses
+    if (/_owner_fkey|_client_id_fkey|violates foreign key/i.test(em) || (/jwt|PGRST301/i.test(em) && !(await checkAccountAlive()))) {
+      if (S.session) await removedSignOut();
+      err.textContent = ''; setTimeout(() => authSheet(() => placeOrder(err)), 300); return;
+    }
+    err.textContent = niceErr(e); btn.disabled = false; btn.textContent = 'Place order';
+  }
 }
 
 /* ---------- sign in: one field (mobile number or email) → password, or create a password ----------
@@ -615,6 +641,7 @@ function authSheet(after, save) {
     if (title.textContent === t) return;
     title.classList.add('fade'); setTimeout(() => { title.textContent = t; title.classList.remove('fade'); }, 160);
   }
+  let first = true;
   function setStep(st) {
     step = st; err.textContent = '';
     const done = st !== 'id';
@@ -632,7 +659,7 @@ function authSheet(after, save) {
     btn.id = done ? 'a-go' : 'a-next';
     btn.textContent = st === 'id' ? 'Continue' : st === 'login' ? 'Sign in' : save ? 'Save my account' : 'Create account';
     btn.disabled = false;
-    setTimeout(() => (done ? (nm.hidden ? pw : nm) : id).focus(), done ? 320 : 50);
+    if (!first) setTimeout(() => (done ? (nm.hidden ? pw : nm) : id).focus(), done ? 320 : 50);   // never on open: no surprise keyboard
   }
   async function next() {
     err.textContent = '';
@@ -683,7 +710,7 @@ function authSheet(after, save) {
       btn.disabled = false;
     }
   }
-  openModal(sheet); setStep('id');
+  openModal(sheet); setStep('id'); first = false;
 }
 async function refreshProfile() {
   try {
@@ -774,7 +801,7 @@ function copyText(t) {
   else toast('Long-press to copy it.', true);
 }
 /* paying: pick one of four ways, then a QR + screenshot, or "I've paid" for chat */
-function payModal(o) {
+function payModal(o, fresh) {
   const P = S.biz.pay || {};
   const ways = Object.keys(PAYWAYS).filter(k => (k === 'wechat' ? P.wechatQr : k === 'alipay' ? P.alipayQr : true));
   let way = PAYWAYS[o.pay_method] && ways.includes(o.pay_method) && o.pay_submitted_at ? o.pay_method : '', blob = null, prev = '';
@@ -785,12 +812,21 @@ function payModal(o) {
       try { blob = await shrink(f); if (prev) URL.revokeObjectURL(prev); prev = URL.createObjectURL(blob); onPick(); } catch (x) { err.textContent = niceErr(x); }
     } }));
   function drawChoose() {
-    sheet.replaceChildren(el('h2', { text: `Order #${pad3(o.no)} · ${money(o.total)}` }), el('div', { class: 'sub', text: 'Pay now or later, whatever suits you.' }),
-      el('div', { class: 'payways' },
-        el('button', { class: 'payway later', type: 'button', id: 'way-later', onclick: closeModal },
-          el('span', { class: 'later-ic', text: '🕒' }), el('span', {}, el('b', { text: 'Pay later' }), el('small', { text: 'Pay any time from My orders' })), el('span', { class: 'chev', text: '›' })),
-        ways.map(k => el('button', { class: 'payway', type: 'button', id: 'way-' + k, onclick: () => { way = k; drawWay(); } },
-          payLogo(k), el('span', {}, el('b', { text: PAYWAYS[k].title }), el('small', { text: PAYWAYS[k].hint })), el('span', { class: 'chev', text: '›' })))));
+    const opts = el('div', { class: 'payopts' }, el('div', { class: 'payopts-in' },
+      ...ways.map(k => el('button', { class: 'payway', type: 'button', id: 'way-' + k, onclick: () => { way = k; drawWay(); } },
+        payLogo(k), el('span', {}, el('b', { text: PAYWAYS[k].title }), el('small', { text: PAYWAYS[k].hint })), el('span', { class: 'chev', text: '›' })))));
+    const now = el('button', { class: 'btn primary paynow', type: 'button', id: 'pay-now', 'aria-expanded': 'false', onclick: () => {
+      const open = !opts.classList.contains('open');
+      opts.classList.toggle('open', open); now.setAttribute('aria-expanded', String(open)); now.classList.toggle('open', open);
+      if (open) setTimeout(() => opts.scrollIntoView({ block: 'nearest', behavior: 'smooth' }), 320);
+    } }, el('span', { text: 'Pay now' }), el('span', { class: 'pn-chev', text: '⌄' }));
+    sheet.replaceChildren(
+      ...(fresh ? [el('div', { class: 'placed' }, el('div', { class: 'placed-ic', text: '✓' }), el('h2', {}, 'Your order ', el('span', { class: 'no', text: '#' + pad3(o.no) }), ' has been placed successfully'),
+        el('div', { class: 'sub', text: `Total ${money(o.total)}` }))]
+        : [el('h2', { text: `Order #${pad3(o.no)} · ${money(o.total)}` }), el('div', { class: 'sub', text: 'Pay now or later, whatever suits you.' })]),
+      el('div', { class: 'paybtns' },
+        el('button', { class: 'btn', type: 'button', id: 'way-later', onclick: closeModal }, 'Pay later'),
+        now, opts));
   }
   function drawWay() {
     const w = PAYWAYS[way], isQr = !way.endsWith('_chat'), app = APP[w.base];
@@ -845,7 +881,7 @@ const pad3 = n => String(n || 0).padStart(3, '0');
 function viewDone(root) {
   const o = S.lastOrder;
   if (!o) { go('menu'); return; }
-  root.append(el('div', { class: 'done-hero' }, el('h1', { text: 'Order sent' }), el('div', { class: 'no', text: '#' + pad3(o.no) }),
+  root.append(el('div', { class: 'done-hero' }, el('h1', {}, 'Your order ', el('span', { class: 'no', text: '#' + pad3(o.no) }), ' has been placed successfully'),
     el('p', { class: 'sub', text: `${o.type === 'delivery' ? 'Delivery to ' + o.address : 'Pickup'} · ${[dayLabel(o.slot_date) || 'Today', o.slot].filter(Boolean).join(' · ')}` }),
     el('p', { class: 'sub', text: 'We will accept it shortly. You can follow it in Orders.' })),
   orderCard(o), el('button', { class: 'btn big-btn', type: 'button', onclick: () => go('orders') }, 'See all my orders'));
@@ -1017,9 +1053,10 @@ async function boot() {
   render();
   if (!sb) { S.loadErr = 'Could not start. Check your internet and reload.'; render(); return; }
   await loadShop();
-  try { const r = await sb.auth.getSession(); if (r && r.data && r.data.session) { await onSession(r.data.session); render(); } } catch (_) { /* signed out */ }
+  try { const r = await sb.auth.getSession(); if (r && r.data && r.data.session) { if (await checkAccountAlive(r.data.session)) { await onSession(r.data.session); render(); } } } catch (_) { /* signed out */ }
   sb.auth.onAuthStateChange((ev, session) => { if (ev === 'SIGNED_OUT') { forgetPerson(); setTimeout(render); } else if (session) S.session = session; });
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { loadShop(); loadOrders(); } });
+  let lastAlive = 0;
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { loadShop(); loadOrders(); if (Date.now() - lastAlive > 30000) { lastAlive = Date.now(); checkAccountAlive(); } } });
   setInterval(() => { if (document.visibilityState === 'visible') { loadOrders(); loadMsgs(); } }, 20000);
 }
 boot();

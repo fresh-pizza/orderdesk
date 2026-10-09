@@ -53,7 +53,7 @@ body.shop{padding-bottom:calc(84px + env(safe-area-inset-bottom,0px))}
 .paybox{background:var(--accent-bg);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:8px}
 .paybox.ok{background:var(--leaf-bg);color:var(--leaf)}
 .done-hero{text-align:center;padding:18px 8px 6px}
-.done-hero .no{display:inline-block;background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-size:26px;font-weight:700;padding:4px 14px;border-radius:10px;margin:6px 0}
+.done-hero h1{font-size:21px;line-height:1.35;margin:0 0 6px}
 .shot-prev{max-width:180px;border-radius:8px;border:1px solid var(--line)}
 
 /* menu as rows with the photo on the left, like delivery apps; two columns on wide screens */
@@ -263,23 +263,41 @@ input[readonly]{background:var(--surface2)!important;color:var(--muted)}
 .acct-txt{display:flex;flex-direction:column;min-width:0}
 .acct-txt b{font-family:var(--font-body);font-size:17px;font-weight:700;overflow-wrap:anywhere}
 .acct-txt small{color:var(--muted);font-size:13px}
-/* sign in (2.0): one field, then password slides in */
-.sheet.auth{display:flex;flex-direction:column;gap:12px}
-.sheet.auth h2{margin:0 0 4px}
+/* sign in (2.0): compact, one field, then password slides in */
+.sheet.auth{display:flex;flex-direction:column;gap:10px;padding-bottom:max(18px,env(safe-area-inset-bottom))}
+.sheet.auth h2{margin:0 0 2px;font-size:18px;font-weight:700;letter-spacing:-.01em}
 .auth-title{transition:opacity .16s ease,transform .16s ease}
 .auth-title.fade{opacity:0;transform:translateY(-4px)}
 .auth-id{position:relative}
-.sheet.auth input{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:13px 12px;font-size:16px;min-width:0}
+.sheet.auth input{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:16px;line-height:1.3;min-width:0}   /* 16px stops iPhones zooming in */
 .sheet.auth input:focus{outline:none;border-color:var(--ink)}
+.sheet.auth input::placeholder{font-size:15px;color:var(--muted);opacity:.8}
 .auth-id input{width:100%;transition:padding .3s ease,font-size .3s ease,background-color .3s ease,border-color .3s ease}
-.auth-change{position:absolute;right:12px;top:50%;transform:translateY(-50%);opacity:0;pointer-events:none;transition:opacity .25s ease}
-.sheet.auth.submitted .auth-id input{padding-top:7px;padding-bottom:7px;padding-right:70px;font-size:14px;font-weight:600;background:var(--surface);border-color:transparent;color:var(--muted)}
+.auth-change{position:absolute;right:12px;top:50%;transform:translateY(-50%);opacity:0;pointer-events:none;transition:opacity .25s ease;font-size:13px}
+.sheet.auth.submitted .auth-id input{padding-top:7px;padding-bottom:7px;padding-right:70px;font-size:14px;font-weight:600;background:var(--surface2);border-color:transparent;color:var(--muted)}
 .sheet.auth.submitted .auth-change{opacity:1;pointer-events:auto}
-.auth-more{display:grid;grid-template-rows:0fr;opacity:0;transform:translateY(8px);transition:grid-template-rows .3s ease,opacity .3s ease,transform .3s ease}
-.auth-more.open{grid-template-rows:1fr;opacity:1;transform:none}
-.auth-more-in{overflow:hidden;display:flex;flex-direction:column;gap:10px;min-height:0}
+.auth-more{display:grid;grid-template-rows:0fr;opacity:0;visibility:hidden;transform:translateY(8px);transition:grid-template-rows .3s ease,opacity .3s ease,transform .3s ease,visibility 0s .3s}
+.auth-more.open{grid-template-rows:1fr;opacity:1;visibility:visible;transform:none;transition-delay:0s}
+.auth-more-in{overflow:hidden;display:flex;flex-direction:column;gap:8px;min-height:0}
 .auth-more-in input{width:100%}
 .auth-more-in [hidden]{display:none}
-.auth-forgot{margin:0}
+.auth-forgot{margin:0;font-size:12px}
+.sheet.auth .err{font-size:13px}
 .sheet.auth .err:empty{display:none}
+.sheet.auth .btn.primary{width:100%;padding:11px;font-size:15px;font-weight:600;border-radius:10px;margin-top:2px}
+.sheet.auth .btn.primary:disabled{opacity:.6}
+/* order placed + Pay later / Pay now */
+.placed{text-align:center;padding:2px 4px 6px}
+.placed-ic{width:44px;height:44px;margin:0 auto 8px;border-radius:50%;background:var(--go-bg,#1f9d55);color:var(--go-ink,#fff);display:grid;place-items:center;font-size:24px;font-weight:700}
+.placed h2{font-size:18px;line-height:1.35;margin:0 0 4px}
+.placed h2 .no,.done-hero h1 .no{display:inline-block;background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-size:.9em;font-weight:700;padding:1px 8px;border-radius:8px;margin:0 2px}
+.paybtns{display:flex;flex-direction:column;gap:8px;margin-top:10px}
+.paybtns>.btn{width:100%;padding:12px;font-size:15px;font-weight:600;border-radius:12px}
+.paynow{display:flex;align-items:center;justify-content:center;gap:8px}
+.paynow .pn-chev{display:inline-block;transition:transform .25s ease;font-size:18px;line-height:1}
+.paynow.open .pn-chev{transform:rotate(180deg)}
+.payopts{display:grid;grid-template-rows:0fr;opacity:0;visibility:hidden;transition:grid-template-rows .3s ease,opacity .3s ease,visibility 0s .3s}
+.payopts.open{grid-template-rows:1fr;opacity:1;visibility:visible;transition-delay:0s}
+.payopts-in{overflow:hidden;min-height:0;display:flex;flex-direction:column;gap:8px}
+.payopts.open .payopts-in{padding-top:2px}
 #me-login{display:flex;align-items:center;gap:8px;flex-wrap:wrap}

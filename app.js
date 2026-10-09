@@ -9,7 +9,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   bucket: 'photos',
 };
-const VERSION = '2.9.0';
+const VERSION = '2.9.1';
 const COLLS = ['menu', 'customers', 'orders', 'settings', 'purchases'];
 const DEFAULT_SETTINGS = { id: 'main', name: 'My kitchen', currency: '¥', deliveryFee: 0, addresses: [], wechatQr: '', alipayQr: '', wechatId: '', alipayId: '', pickup: true, inventory: {} };
 
@@ -696,6 +696,9 @@ function slotText(o) {
   return [dayLabel(o.slotDate), o.slot || 'any time'].filter(Boolean).join(' · ');
 }
 const custOf = o => (o.customerId && M.customers.get(o.customerId)) || null;
+/* the shop keeps its own automatic profile per account; those live in Shop accounts, never in your Customers list */
+const AUTO_PROFILE = 'Signed up in the shop';
+const realCusts = () => S.customers.filter(c => c.notes !== AUTO_PROFILE);
 function whoAvatar(o, cls) { const c = custOf(o); return avatar({ name: o.customerName || 'Walk-in', photo: c && !c.deleted ? c.photo : '' }, cls); }
 /* progress the client sees: Received -> Accepted -> Ready / On the way -> Done */
 /* order flow: Received -> Accept -> Mark paid -> On the way / Ready -> Delivered / Picked up */
@@ -906,7 +909,7 @@ function resetPwSheet(o) {
     el('div', { class: 'actions' }, el('button', { class: 'btn', type: 'button', onclick: closeModal }, 'Close'), save)));
 }
 /* Link: connect a shop account to one of your customers */
-const isLinked = o => { const c = custOf(o); return !!(c && c.notes !== 'Signed up in the shop'); };
+const isLinked = o => { const c = custOf(o); return !!(c && c.notes !== AUTO_PROFILE); };
 function linkSheet(o) {
   const words = s => String(s || '').toLowerCase().replace(/[_\-.]+/g, ' ').split(/\s+/).filter(w => w.length > 1);
   let q = o.customerName || '';
@@ -914,7 +917,7 @@ function linkSheet(o) {
   const input = el('input', { id: 'link-q', type: 'search', value: q, placeholder: 'Search your customers', 'aria-label': 'Search customers', oninput: e => { q = e.target.value; draw(); } });
   function draw() {
     const ws = words(q), qq = q.trim().toLowerCase();
-    const pool = S.customers.filter(c => c.notes !== 'Signed up in the shop');
+    const pool = realCusts();
     const score = c => { const n = (c.name || '').toLowerCase(); if (!qq) return 1; if (n === qq) return 100; let sc = n.includes(qq) ? 50 : 0; for (const w of ws) if (n.includes(w)) sc += 10; if ((c.phone || '').includes(qq)) sc += 40; return sc; };
     const hits = pool.map(c => [score(c), c]).filter(([sc]) => sc > 0).sort((a, b) => b[0] - a[0] || (a[1].name || '').localeCompare(b[1].name || '')).slice(0, 40);
     list.replaceChildren(...(hits.length ? hits.map(([, c]) => el('button', { class: 'link-row', type: 'button', 'data-id': c.id, onclick: () => doLink(c) },
@@ -924,9 +927,10 @@ function linkSheet(o) {
   async function doLink(c) {
     if (!sb || navigator.onLine === false) return toast('Linking needs internet.', true);
     try {
-      const { error } = await sb.rpc('link_customer', { p_order_id: o.id, p_customer_id: c.id });
+      const { error } = await sb.rpc('link_account', { p_user: o.clientId, p_customer_id: c.id });
       if (error) throw error;
       toast(`Linked to ${c.name}`); closeModal(); Sync.soon(0);
+      if (S.view === 'customers' && S.custTab === 'accounts') { try { await loadAccts(); } catch (_) { /* shown next time */ } render(true); }
     } catch (e) { toast('Could not link: ' + ((e && e.message) || e), true); }
   }
   draw();
@@ -1049,7 +1053,7 @@ function refreshCustomerBits() {
   const nameQ = d.name.trim().toLowerCase(), phoneQ = d.phone.replace(/\s/g, '');
   let hits = [];
   if (!d.customerId && (nameQ.length >= 2 || phoneQ.length >= 3)) {
-    hits = S.customers.filter(c => (nameQ.length >= 2 && (c.name || '').toLowerCase().includes(nameQ)) ||
+    hits = realCusts().filter(c => (nameQ.length >= 2 && (c.name || '').toLowerCase().includes(nameQ)) ||
       (phoneQ.length >= 3 && (c.phone || '').replace(/\s/g, '').includes(phoneQ))).slice(0, 5);
   }
   N.suggest.replaceChildren(...(hits.length ? [el('div', { class: 'suggest' }, hits.map(c =>
@@ -1170,7 +1174,7 @@ async function saveOrder() {
   let cid = d.customerId;
   if (!cid && (name || phone)) {
     const ph = phone.replace(/\s/g, '');
-    const found = ph && S.customers.find(c => (c.phone || '').replace(/\s/g, '') === ph);
+    const found = ph && realCusts().find(c => (c.phone || '').replace(/\s/g, '') === ph);
     if (found) cid = found.id;
     else {
       cid = newId();
@@ -1542,9 +1546,10 @@ function viewCustomers(root) {
     el('button', { type: 'button', id: 'ct-' + k, 'aria-pressed': (S.custTab || 'list') === k, onclick: () => { S.custTab = k; render(true); } }, l))));
   if (accts) return accountsView(root);
   const stats = custStats();
-  const regulars = S.customers.filter(c => (stats.get(c.id) || { n: 0 }).n >= 3).length;
-  root.append(el('div', { class: 'tiles' }, tile('Customers', S.customers.length), tile('Regulars (3+)', regulars),
-    tile('Repeat rate', S.customers.length ? Math.round(100 * S.customers.filter(c => (stats.get(c.id) || { n: 0 }).n >= 2).length / S.customers.length) + '%' : '–')));
+  const rc = realCusts();
+  const regulars = rc.filter(c => (stats.get(c.id) || { n: 0 }).n >= 3).length;
+  root.append(el('div', { class: 'tiles' }, tile('Customers', rc.length), tile('Regulars (3+)', regulars),
+    tile('Repeat rate', rc.length ? Math.round(100 * rc.filter(c => (stats.get(c.id) || { n: 0 }).n >= 2).length / rc.length) + '%' : '–')));
   root.append(el('div', { class: 'field', style: 'margin-bottom:12px' }, el('input', { id: 'c-q', type: 'search', 'aria-label': 'Search customers', placeholder: 'Search by name, phone or address', value: S.custQ,
     oninput: e => { S.custQ = e.target.value; P.fn(); } })));
   const res = el('div');
@@ -1567,7 +1572,7 @@ function accountsView(root) {
         const d = acctIdent(a.login);
         return el('button', { class: 'crow acct-row', type: 'button', 'data-id': a.user_id, onclick: () => acctSheet(a) },
           el('span', { class: 'acct-ic', text: d.icon }),
-          el('div', {}, el('div', { class: 'nm', text: a.name || d.id }), el('div', { class: 'meta' }, a.name ? d.id + ' ' : '', el('span', { class: 'vtag' + (a.verified ? ' ok' : ''), text: a.verified ? '✓ Verified' : 'Unverified' }))),
+          el('div', {}, el('div', { class: 'nm', text: (a.name || d.id) + (a.linked ? ' 🔗' : '') }), el('div', { class: 'meta' }, a.name ? d.id + ' ' : '', el('span', { class: 'vtag' + (a.verified ? ' ok' : ''), text: a.verified ? '✓ Verified' : 'Unverified' }))),
           el('div', { class: 'meta', style: 'text-align:right' }, a.orders ? `${a.orders} order${a.orders == 1 ? '' : 's'}` : 'No orders', el('br'), 'joined ' + dateShort(Date.parse(a.created_at))));
       })));
   }
@@ -1596,13 +1601,14 @@ function acctSheet(a) {
   const row = (k, v) => el('div', { class: 'od-row' }, el('span', { class: 'sub', text: k }), el('b', { text: v }));
   openModal(el('div', { class: 'sheet' },
     el('h2', { text: d.icon + ' ' + d.id }),
-    a.name ? el('div', { class: 'sub', text: a.name }) : null, vbox,
+    a.name ? el('div', { class: 'sub', text: a.linked ? 'Linked to ' + a.name : 'Typed at checkout: ' + a.name }) : null, vbox,
     el('section', { class: 'od-sect' }, row('Joined', when(a.created_at)), row('Last sign in', when(a.last_sign_in_at)),
       row('Orders', String(a.orders || 0)), a.last_order ? row('Last order', when(a.last_order)) : null),
     el('div', { class: 'btns' },
       el('button', { class: 'btn small', type: 'button', id: 'as-reset', onclick: () => resetPwSheet({ clientId: a.user_id, customerName: a.name, clientLogin: a.login }) }, '🔑 Reset password'),
-      a.customer_id && M.customers && M.customers.get(a.customer_id) ? el('button', { class: 'btn small', type: 'button', onclick: () => customerModal(M.customers.get(a.customer_id)) }, 'Customer record') : null),
-    el('div', { class: 'sub', style: 'margin-top:14px', text: 'Deleting removes this login, its chat and its reviews. Their orders and customer record stay. They are signed out within an hour.' }),
+      el('button', { class: 'btn small link-btn', type: 'button', id: 'as-link', onclick: () => linkSheet({ clientId: a.user_id, customerName: a.name }) }, a.linked ? '🔗 Linked · change' : '🔗 Link to customer'),
+      a.linked && M.customers.get(a.customer_id) ? el('button', { class: 'btn small', type: 'button', onclick: () => customerModal(M.customers.get(a.customer_id)) }, 'Customer record') : null),
+    el('div', { class: 'sub', style: 'margin-top:14px', text: 'Deleting removes this login, its chat and its reviews. Their orders stay, and so does the customer you linked. They are signed out within an hour.' }),
     el('div', { class: 'actions' },
       confirmBtn('Delete account', 'Tap again to delete', async () => {
         if (!sb || navigator.onLine === false) return toast('Needs internet.', true);
@@ -1616,9 +1622,10 @@ function acctSheet(a) {
 function customerResults(root) {
   const stats = custStats();
   const q = S.custQ.trim().toLowerCase();
-  const list = S.customers.filter(c => !q || [c.name, c.phone, c.address].some(x => (x || '').toLowerCase().includes(q)))
+  const all = realCusts();
+  const list = all.filter(c => !q || [c.name, c.phone, c.address].some(x => (x || '').toLowerCase().includes(q)))
     .sort((a, b) => ((stats.get(b.id) || {}).last || 0) - ((stats.get(a.id) || {}).last || 0) || (a.name || '').localeCompare(b.name || ''));
-  if (!list.length) { root.append(el('div', { class: 'empty' }, el('b', { text: S.customers.length ? 'No one matches' : 'No customers yet' }), S.customers.length ? 'Try another word.' : 'Customers are added automatically when you save an order with a name or phone number.')); return; }
+  if (!list.length) { root.append(el('div', { class: 'empty' }, el('b', { text: all.length ? 'No one matches' : 'No customers yet' }), all.length ? 'Try another word.' : 'Customers are added automatically when you save an order with a name or phone number.')); return; }
   root.append(el('div', { class: 'clist' }, list.slice(0, 300).map(c => {
     const s = stats.get(c.id);
     return el('button', { class: 'crow', type: 'button', onclick: () => customerModal(c) },
@@ -2061,7 +2068,7 @@ function excelBlob() {
         ...orders.flatMap(o => (o.items || []).map(i => [o.no, { date: o.createdAt }, ST[o.status] || o.status, i.name, i.variant || '', num(i.qty), num(i.price), num(i.qty) * num(i.price)]))] },
     { name: 'Customers', widths: [20, 15, 30, 25, 8, 10, 11],
       rows: [['Name', 'Phone', 'Address', 'Notes', 'Orders', 'Spent', 'Last order'],
-        ...S.customers.map(c => { const x = st.get(c.id); return [c.name, c.phone, c.address, c.notes, x ? x.n : 0, x ? x.spent : 0, x ? { date: x.last } : '']; })] },
+        ...realCusts().map(c => { const x = st.get(c.id); return [c.name, c.phone, c.address, c.notes, x ? x.n : 0, x ? x.spent : 0, x ? { date: x.last } : '']; })] },
     { name: 'Purchases', widths: [11, 24, 8, 8, 10, 30, 8],
       rows: [['Date', 'Item', 'Qty', 'Unit', 'Cost', 'Note', 'Pictures'],
         ...S.purchases.slice().sort((a, b) => (a.day || '').localeCompare(b.day || '')).map(p => [p.day, p.item, num(p.qty), p.unit, num(p.cost), p.note, (p.photos || []).length])] },
