@@ -11,7 +11,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   phoneDomain: 'phone.orderdesk.app', // phone logins are stored as <digits>@this, no SMS involved
 };
-const SHOP_VERSION = '2.2.0';
+const SHOP_VERSION = '2.3.0';
 /* phones (WeChat especially) keep old copies of web pages; if a newer shop is online, reload it */
 (async function freshness() {
   try {
@@ -210,8 +210,26 @@ const niceErr = e => {
 const TAB_ICONS = {
   menu: '<path d="M4 5h16M4 12h16M4 19h10"/>',
   orders: '<path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6"/>',
+  chat: '<path d="M20.5 11.5a8 8 0 0 1-11.7 7.1L3.5 20l1.4-4.9A8 8 0 1 1 20.5 11.5z"/><path d="M8.5 11.5h7M8.5 14.5h4"/>',
   me: '<circle cx="12" cy="8" r="4"/><path d="M4 21c1.2-4 4.3-6 8-6s6.8 2 8 6"/>',
 };
+const ICONS = {
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  moon: '<path d="M20.5 13.5A8.5 8.5 0 1 1 10.5 3.5a6.7 6.7 0 0 0 10 10z"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6l1.4 1.4M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4L6 18M18 6l1.4-1.4"/>',
+  chat: '<path d="M20.5 11.5a8 8 0 0 1-11.7 7.1L3.5 20l1.4-4.9A8 8 0 1 1 20.5 11.5z"/><path d="M8.5 11.5h7M8.5 14.5h4"/>',
+  receipt: '<path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6"/>',
+  bag: '<path d="M5 8h14l-1.3 11.2a2 2 0 0 1-2 1.8H8.3a2 2 0 0 1-2-1.8z"/><path d="M9 10V7a3 3 0 0 1 6 0v3"/>',
+  bike: '<circle cx="6" cy="17" r="3"/><circle cx="18" cy="17" r="3"/><path d="M6 17l4-8h5l3 8M10 9L8.5 6H6M14 6h3"/>',
+  shield: '<path d="M12 3l8 3v6c0 4.5-3.2 8-8 9-4.8-1-8-4.5-8-9V6z"/><path d="M8.5 12.2l2.5 2.5 4.5-5"/>',
+  phone: '<path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v3a2 2 0 0 1-2 2A15 15 0 0 1 3 6a2 2 0 0 1 2-2z"/>',
+  mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3.5 7l8.5 6 8.5-6"/>',
+};
+function ic(name, size = 18) {
+  const s = el('span', { class: 'ic', 'aria-hidden': 'true' });
+  s.innerHTML = `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICONS[name]}</svg>`;
+  return s;
+}
 const activeOrders = () => S.orders.filter(o => o.status !== 'done' && o.status !== 'cancelled');
 const unreadMsgs = () => S.msgs.filter(m => m.from_admin && !m.read_at).length;
 function renderTop() {
@@ -221,15 +239,15 @@ function renderTop() {
     el('div', { class: 'top-title', id: 'top-title', text: sub[0] })]
     : [el('button', { class: 'biz', type: 'button', onclick: () => go('menu') }, S.biz.name || 'Order food')]));
   document.title = S.biz.name ? `${S.biz.name} · Order` : 'Order food';
-  const tabOf = { menu: 'menu', checkout: 'menu', details: 'menu', done: 'orders', orders: 'orders', me: 'me', chat: 'me' }[S.view] || 'menu';
-  const badge = { orders: activeOrders().length, me: unreadMsgs() };
-  $('#tabs').replaceChildren(...[['menu', 'Menu'], ['orders', 'Orders'], ['me', 'Me']].map(([k, l]) => {
-    const b = el('button', { type: 'button', id: 'tab-' + k, 'aria-current': tabOf === k ? 'page' : false, onclick: () => go(k) });
+  const tabOf = { menu: 'menu', checkout: 'menu', details: 'menu', done: 'orders', orders: 'orders', me: 'me', chat: 'chat' }[S.view] || 'menu';
+  const badge = { orders: activeOrders().length, chat: unreadMsgs() };
+  $('#tabs').replaceChildren(...[['menu', 'Menu'], ['orders', 'Orders'], ...(S.msgsOff ? [] : [['chat', 'Messages']]), ['me', 'Me']].map(([k, l]) => {
+    const b = el('button', { type: 'button', id: 'tab-' + k, 'aria-current': tabOf === k ? 'page' : false, onclick: () => (k === 'chat' ? openChat(null) : go(k)) });
     b.innerHTML = `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${TAB_ICONS[k]}</svg>`;
     b.append(el('span', { text: l }), badge[k] ? el('span', { class: 'tbadge', text: badge[k] }) : '');
     return b;
   }));
-  document.body.classList.toggle('no-tabs', S.view === 'checkout' || S.view === 'details' || S.view === 'chat');
+  document.body.classList.toggle('no-tabs', S.view === 'checkout' || S.view === 'details');
 }
 /* account: who is signed in */
 function whoAmI() {
@@ -272,22 +290,18 @@ function viewMe(root) {
       el('button', { class: 'btn primary big-btn', type: 'button', id: 'me-signin', onclick: () => authSheet(() => render()) }, 'Sign in')));
     return;
   }
-  const un = unreadMsgs();
   root.append(
     el('div', { class: 'box' }, el('div', { class: 'acct-card' + (S.profile && S.profile.photo ? ' has-pic' : '') },
         S.profile && S.profile.photo ? el('img', { class: 'me-pic', src: publicUrl(S.profile.photo), alt: '' }) : null,
         el('div', { class: 'acct-txt' }, el('b', { id: 'me-id', text: me.kind === 'Guest' ? me.id : ((S.profile && S.profile.name) || me.id) }),
-          me.kind !== 'Guest' ? el('small', { id: 'me-login' }, S.profile && S.profile.name ? (me.kind === 'Phone' ? '📱 ' : '✉ ') + me.id : '',
+          me.kind !== 'Guest' ? el('small', { id: 'me-login' }, ...(S.profile && S.profile.name ? [ic(me.kind === 'Phone' ? 'phone' : 'mail', 13), ' ' + me.id] : ['']),
             S.acct !== undefined ? el('span', { class: 'vtag' + (S.acct && S.acct.verified ? ' ok' : ''), id: 'me-verified', text: S.acct && S.acct.verified ? '✓ Verified' : 'Unverified' }) : null) : null)),
       me.kind === 'Guest' ? el('p', { class: 'fineprint', text: 'Guest orders are saved on this phone only. Save your account with your phone number or email to keep your orders and messages on any phone.' }) : null,
       el('div', { class: 'btnrow' },
         me.kind === 'Guest' ? el('button', { class: 'btn primary', type: 'button', id: 'me-save', onclick: () => authSheet(() => render(), true) }, 'Save my account') : null,
         el('button', { class: 'btn danger', type: 'button', id: 'acct-out', onclick: signOutShop }, 'Sign out'))),
-    S.msgsOff ? null : el('button', { class: 'me-row', type: 'button', id: 'me-chat', onclick: () => openChat(null) },
-      el('span', { class: 'me-ic', text: '💬' }), el('span', { class: 'me-mid' }, el('b', { text: 'Messages' }), el('small', { text: un ? `${un} new from ${S.biz.name || 'us'}` : `Chat with ${S.biz.name || 'us'}` })),
-      un ? el('span', { class: 'tbadge static', text: un }) : el('span', { class: 'chev', text: '›' })),
     el('button', { class: 'me-row', type: 'button', onclick: () => go('orders') },
-      el('span', { class: 'me-ic', text: '🧾' }), el('span', { class: 'me-mid' }, el('b', { text: 'My orders' }), el('small', { text: `${S.orders.length} order${S.orders.length === 1 ? '' : 's'}` })), el('span', { class: 'chev', text: '›' })));
+      el('span', { class: 'me-ic' }, ic('receipt', 22)), el('span', { class: 'me-mid' }, el('b', { text: 'My orders' }), el('small', { text: `${S.orders.length} order${S.orders.length === 1 ? '' : 's'}` })), el('span', { class: 'chev', text: '›' })));
 }
 function go(v) { S.view = v; render(); window.scrollTo(0, 0); if (v === 'orders') loadOrders(); if (v === 'me') loadMsgs(); }
 function render() {
@@ -364,25 +378,25 @@ function dishSheet(m) {
     el('div', { class: 'dd-price-card' },
       el('div', {}, el('div', { class: 'dd-price' }, el('small', { text: S.biz.currency || '' }), vs.length ? String(lo) : '', lo !== hi ? el('span', { class: 'dd-from', text: ` – ${hi}` }) : null),
         el('div', { class: 'dd-sold', text: sold ? `Sold ${soldText(sold)} this month` : 'Freshly made to order' })),
-      el('div', { class: 'dd-badge ' + (night ? 'night' : 'day') }, el('b', { text: night ? '🌙 Night' : '☀ Day' }), el('small', { text: night ? 'Evening dish' : 'Daytime dish' }))),
+      el('div', { class: 'dd-badge ' + (night ? 'night' : 'day') }, el('b', {}, ic(night ? 'moon' : 'sun', 15), night ? ' Night' : ' Day'), el('small', { text: night ? 'Evening dish' : 'Daytime dish' }))),
     el('div', { class: 'dd-card' }, el('h2', { class: 'dd-name', text: m.name }),
       el('div', { class: 'dd-tags' }, el('span', { class: 'dd-tag', text: m.category || 'Dish' }), r ? el('span', { class: 'dd-tag', text: `★ ${r.avg}` }) : null,
         ...(m.variants || []).filter(v => v.label).map(v => el('span', { class: 'dd-tag', text: `${v.label} ${money(v.price)}` }))),
       m.description ? el('p', { class: 'dd-desc', text: m.description }) : null),
     el('div', { class: 'dd-card' },
-      el('div', { class: 'dd-info' }, el('span', { text: '🛵' }), el('b', { text: minFee ? `Delivery from ${money(minFee)}` : 'Free delivery' }), el('span', { class: 'dot' }), el('span', { class: 'fineprint', text: (S.biz.addresses || []).length + ' delivery points' })),
-      (m.windows || []).length ? el('div', { class: 'dd-info' }, el('span', { text: '🕒' }), el('b', { text: 'Served' }), el('span', { text: m.windows.map(winLabel).join(', ') })) : null,
-      el('div', { class: 'dd-info' }, el('span', { text: '✅' }), el('b', { text: 'Pay after we accept' }), el('span', { class: 'fineprint', text: 'WeChat Pay · Alipay' }))),
+      el('div', { class: 'dd-info' }, el('span', { class: 'dd-ico' }, ic('bike', 20)), el('b', { text: minFee ? `Delivery from ${money(minFee)}` : 'Free delivery' }), el('span', { class: 'dot' }), el('span', { class: 'fineprint', text: (S.biz.addresses || []).length + ' delivery points' })),
+      (m.windows || []).length ? el('div', { class: 'dd-info' }, el('span', { class: 'dd-ico' }, ic('clock', 20)), el('b', { text: 'Served' }), el('span', { text: m.windows.map(winLabel).join(', ') })) : null,
+      el('div', { class: 'dd-info' }, el('span', { class: 'dd-ico' }, ic('shield', 20)), el('b', { text: 'Pay after we accept' }), el('span', { class: 'fineprint', text: 'WeChat Pay · Alipay' }))),
     ingCard,
-    el('div', { class: 'dd-card' }, el('div', { class: 'dd-rev-h' }, el('h3', { text: `Reviews (${rs.length})` }), rs.length ? el('span', { class: 'dd-good', text: `${good}% positive 👍` }) : null),
+    el('div', { class: 'dd-card' }, el('div', { class: 'dd-rev-h' }, el('h3', { text: `Reviews (${rs.length})` }), rs.length ? el('span', { class: 'dd-good', text: `${good}% positive` }) : null),
       rs.length ? showSome(rs.map(reviewEl), 3, 'reviews') : el('div', { class: 'fineprint', text: 'No reviews yet. Be the first after your order arrives.' })));
-  const iconBtn = (ic, label, fn, badge) => el('button', { class: 'dd-ic', type: 'button', 'aria-label': label, onclick: fn }, el('span', { class: 'dd-ic-i', text: ic }), el('small', { text: label }), badge ? el('span', { class: 'tbadge', text: badge }) : null);
+  const iconBtn = (ic, label, fn, badge) => el('button', { class: 'dd-ic', type: 'button', 'aria-label': label, onclick: fn }, el('span', { class: 'dd-ic-i' }, ic), el('small', { text: label }), badge ? el('span', { class: 'tbadge', text: badge }) : null);
   openModal(el('div', { class: 'sheet dd shop-dd', id: 'dsheet' },
     el('div', { class: 'dd-top' }, el('button', { class: 'dd-round ds-x', type: 'button', 'aria-label': 'Close', onclick: closeModal }, '⌄')),
     scroller,
     el('div', { class: 'dd-bar shop' },
-      iconBtn('🛍', 'Basket', () => { closeModal(); basketSheet(); }, n || null),
-      S.msgsOff ? null : iconBtn('💬', 'Ask us', () => { closeModal(); openChat(null); }),
+      iconBtn(ic('bag', 22), 'Basket', () => { closeModal(); basketSheet(); }, n || null),
+      S.msgsOff ? null : iconBtn(ic('chat', 22), 'Ask us', () => { closeModal(); openChat(null); }),
       m.available === false ? el('div', { class: 'dd-soldout', text: 'Sold out today' }) : el('div', { class: 'dd-buy' },
         el('button', { class: 'dd-add', type: 'button', id: 'ds-add', onclick: () => add() }, 'Add to basket'),
         el('button', { class: 'dd-now', type: 'button', id: 'ds-now', onclick: () => add(() => { if (basketCount()) go('checkout'); }) }, 'Buy now')))));
@@ -423,7 +437,6 @@ function reviewSheet(o) {
         } catch (x) { err.textContent = niceErr(x); btn.disabled = false; }
       } }, mine ? 'Update review' : 'Send review'))));
 }
-const SVC = { day: '☀ Day menu', night: '🌙 Night menu' };
 /* the order that needs the customer's attention, shown above the menu */
 function actionBanner() {
   const o = activeOrders().filter(x => !x.paid).sort((a, b) => (a.created_at < b.created_at ? 1 : -1))[0] || activeOrders()[0];
@@ -441,12 +454,12 @@ function viewMenu(root) {
   const menu = all;
   const cats = ['All', ...new Set(menu.map(m => m.category || 'Other'))];
   if (!cats.includes(S.cat)) S.cat = 'All';
-  root.append(el('div', { class: 'chips' }, cats.map(c => el('button', { class: 'chip', type: 'button', 'aria-pressed': S.cat === c, onclick: () => { S.cat = c; render(); } }, c))));
   const show = menu.filter(m => S.cat === 'All' || (m.category || 'Other') === S.cat).sort((a, b) => (a.category || '').localeCompare(b.category || '') || (a.name || '').localeCompare(b.name || ''));
   const by = new Map();
   for (const m of show) { const c = m.category || 'Other'; if (!by.has(c)) by.set(c, []); by.get(c).push(m); }
-  // one grid for everything, category names span the full width, so small categories don't leave holes
-  root.append(el('div', { class: 'dishes' }, [...by].map(([c, arr]) => [S.cat === 'All' ? el('h2', { class: 'cat-h', text: c }) : null, arr.map(dishCard)])));
+  const rail = el('nav', { class: 'mrail', 'aria-label': 'Categories' }, cats.map(c => el('button', { class: 'chip rail-i', type: 'button', 'aria-pressed': S.cat === c, onclick: () => { S.cat = c; render(); window.scrollTo(0, 0); } }, c)));
+  const list = el('div', { class: 'dishes' }, [...by].map(([c, arr]) => [S.cat === 'All' ? el('h2', { class: 'cat-h', text: c }) : null, arr.map(dishCard)]));
+  root.append(el('div', { class: 'menu-wrap' }, rail, list));
 }
 function dishCard(m) {
   const vs = (m.variants || []).map(v => num(v.price));
@@ -457,10 +470,10 @@ function dishCard(m) {
   const r = ratingOf(m.id);
   return el('article', { class: 'dish' + (m.available === false ? ' off' : ''), 'data-id': m.id, tabindex: '0', onclick: e => { if (!e.target.closest('.add, .add-step')) dishSheet(m); } }, pic,
     el('div', { class: 'body' },
-      el('h3', {}, m.name, hasNight() ? el('span', { class: 'svc-ic ' + svcOf(m), title: svcOf(m) === 'night' ? 'Night dish' : 'Day dish', text: svcOf(m) === 'night' ? '🌙' : '☀' }) : null),
+      el('h3', {}, m.name, hasNight() ? el('span', { class: 'svc-ic ' + svcOf(m), title: svcOf(m) === 'night' ? 'Night dish' : 'Day dish' }, ic(svcOf(m) === 'night' ? 'moon' : 'sun', 14)) : null),
       r ? el('div', { class: 'rating', text: `★ ${r.avg} (${r.n})` }) : null,
       m.description ? el('div', { class: 'desc', text: m.description }) : null,
-      (m.windows || []).length ? el('div', { class: 'win', text: '🕒 ' + m.windows.map(winLabel).join(', ') }) : null,
+      (m.windows || []).length ? el('div', { class: 'win' }, ic('clock', 13), ' ' + m.windows.map(winLabel).join(', ')) : null,
       el('div', { class: 'foot' }, el('span', { class: 'price', text: vs.length ? (lo === hi ? money(lo) : `${money(lo)} – ${money(hi)}`) : '' }),
         m.available === false ? el('span', { class: 'fineprint', text: 'Sold out' }) : addControl(m, inB))));
 }
@@ -1033,7 +1046,7 @@ function orderCard(o) {
       : el('div', {}, el('div', { class: 'ostatus', text: statusLine(o) }),
         el('div', { class: 'steps' }, STEPS.map((s, i) => el('span', { class: i <= idx ? 'on' : '' }))),
         el('div', { class: 'steplbl' }, STEPS.map((s, i) => i === idx ? el('b', { text: stepLabel(o, s) }) : el('span', { text: stepLabel(o, s) })))),
-    when ? el('div', { class: 'when', text: '🕒 ' + when }) : null,
+    when ? el('div', { class: 'when' }, ic('clock', 14), ' ' + when) : null,
     el('ul', { class: 'lines' }, (o.items || []).map(it => el('li', {}, el('span', { text: `${it.qty}× ${it.name}${it.variant ? ' (' + it.variant + ')' : ''}` }), el('span', { text: money(num(it.price) * it.qty) }))),
       o.type === 'delivery' ? el('li', {}, el('span', { text: 'Delivery · ' + o.address }), el('span', { text: feeText(num(o.fee)) })) : null),
     el('div', { class: 'sumrow total' }, el('span', { text: 'Total' }), el('span', { text: money(o.total) })),
@@ -1042,7 +1055,7 @@ function orderCard(o) {
     o.status === 'done' && !S.reviewsOff ? (() => { const mine = S.reviews.find(r => r.order_id === o.id);
       return el('button', { class: mine ? 'my-rev' : 'btn small primary', type: 'button', id: 'rv-' + o.no, style: 'align-self:flex-start', onclick: () => reviewSheet(o) },
         mine ? [el('span', { class: 'stars', text: starStr(mine.stars) }), ' Your review · edit'] : '★ Write a review'); })() : null,
-    S.msgsOff ? null : el('button', { class: 'link', type: 'button', style: 'align-self:flex-start', onclick: () => openChat(o.no) }, '💬 Message us about this order'));
+    S.msgsOff ? null : el('button', { class: 'link', type: 'button', style: 'align-self:flex-start', onclick: () => openChat(o.no) }, ic('chat', 15), ' Message us about this order'));
 }
 function viewOrders(root) {
   root.append(el('h1', { class: 'page-h', text: 'Orders' }));
@@ -1136,7 +1149,7 @@ function viewChat(root) {
   }
   input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
   CH.list = el('div', { class: 'chat-list' });
-  root.append(el('div', { class: 'chat-top' }, el('button', { class: 'link', type: 'button', onclick: () => go('me') }, '‹ Back'), el('b', { text: S.biz.name || 'Messages' })),
+  root.append(el('div', { class: 'chat-top' }, el('b', { text: 'Messages' }), el('small', { text: S.biz.name || '' })),
     CH.list,
     el('div', { class: 'chat-bar' }, about, el('div', { class: 'chat-row' }, input, el('button', { class: 'btn primary', type: 'button', id: 'chat-send', onclick: send }, 'Send'))));
   drawAbout(); drawChat(); if (unreadMsgs()) markRead();
