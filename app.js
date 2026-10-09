@@ -9,7 +9,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   bucket: 'photos',
 };
-const VERSION = '2.7.0';
+const VERSION = '2.8.0';
 const COLLS = ['menu', 'customers', 'orders', 'settings', 'purchases'];
 const DEFAULT_SETTINGS = { id: 'main', name: 'My kitchen', currency: '¥', deliveryFee: 0, addresses: [], wechatQr: '', alipayQr: '', wechatId: '', alipayId: '', pickup: true, inventory: {} };
 
@@ -155,6 +155,41 @@ const Picker = (() => {
   document.addEventListener('DOMContentLoaded', () => scan(document.body));
   if (document.body) scan(document.body);
   return { scan, enhance };
+})();
+
+/* ---------- sounds (made in the browser, no files) ---------- */
+const Sound = (() => {
+  let ctx = null;
+  const KEY = 'od-sound';
+  const on = () => { try { return localStorage.getItem(KEY) !== 'off'; } catch (_) { return true; } };
+  const set = v => { try { localStorage.setItem(KEY, v ? 'on' : 'off'); } catch (_) { /* fine */ } };
+  function unlock() { // phones only allow sound after the first tap
+    try { if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)(); if (ctx.state === 'suspended') ctx.resume(); } catch (_) { ctx = null; }
+  }
+  ['pointerdown', 'keydown', 'touchstart'].forEach(ev => document.addEventListener(ev, unlock, { passive: true }));
+  function tone(freq, start, dur, type = 'sine', vol = 0.25) {
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = type; o.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, ctx.currentTime + start);
+    g.gain.exponentialRampToValueAtTime(vol, ctx.currentTime + start + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + start + dur);
+    o.connect(g); g.connect(ctx.destination); o.start(ctx.currentTime + start); o.stop(ctx.currentTime + start + dur + 0.05);
+  }
+  const TUNES = {
+    order: [[659, 0, .18], [880, .16, .18], [1047, .32, .35]],          // new order: rising three notes
+    paid: [[1319, 0, .12, 'triangle'], [1760, .1, .4, 'triangle']],     // payment: bright "ding-ding"
+    placed: [[784, 0, .15], [1047, .14, .3]],
+    accepted: [[523, 0, .15], [659, .14, .15], [784, .28, .3]],
+    otw: [[880, 0, .12], [880, .18, .12], [1175, .36, .3]],
+    done: [[784, 0, .15], [988, .14, .15], [1175, .28, .15], [1568, .42, .4]],
+    msg: [[1047, 0, .12, 'triangle'], [1319, .1, .2, 'triangle']],
+  };
+  function play(name) {
+    if (!on()) return;
+    try { if (navigator.vibrate) navigator.vibrate(name === 'order' || name === 'paid' ? [120, 60, 120] : 80); } catch (_) { /* fine */ }
+    try { unlock(); if (!ctx) return; for (const [f, s, d, t] of TUNES[name] || TUNES.msg) tone(f, s, d, t); } catch (_) { /* no sound */ }
+  }
+  return { play, on, set };
 })();
 
 /* ---------- app state ---------- */
@@ -374,7 +409,7 @@ async function pushRows() {
   }
 }
 async function pull() {
-  const changed = [];
+  const changed = [], alerts = [];
   for (const coll of COLLS) {
     const sinceKey = 'since:' + coll;
     let since = (await IDB.get('meta', sinceKey)) || '';
@@ -394,6 +429,10 @@ async function pull() {
         if (r.deleted) {
           if (cur) { M[coll].delete(r.id); ops.push({ store: coll, key: r.id }); changed.push(coll); }
         } else if (!cur || JSON.stringify(stripV(cur)) !== JSON.stringify(r)) {
+          if (coll === 'orders' && S.pulledOnce) {
+            if (!cur && r.source === 'shop' && Date.now() - r.createdAt < 30 * 60000) alerts.push(['order', `New shop order ${orderNo(r.no)} · ${r.customerName || ''}`]);
+            else if (cur && !cur.paySubmittedAt && r.paySubmittedAt && !r.paid) alerts.push(['paid', `${orderNo(r.no)}: customer says paid`]);
+          }
           M[coll].set(r.id, r); ops.push({ store: coll, key: r.id, val: r }); changed.push(coll);
         }
       }
@@ -406,6 +445,8 @@ async function pull() {
     }
   }
   if (changed.length) { refreshArrays([...new Set(changed)]); scheduleRender(); }
+  S.pulledOnce = true;
+  if (alerts.length) { Sound.play(alerts.some(a => a[0] === 'order') ? 'order' : 'paid'); toast(alerts.map(a => a[1]).join(' · ')); }
 }
 function stripV(r) { const o = Object.assign({}, r); delete o._v; return o; }
 function startRealtime() {
@@ -699,9 +740,9 @@ function orderActions(o, after) {
   }
   const cancel = () => confirmBtn('Cancel', 'Sure?', async () => { await setStatus(o, 'cancelled'); done(); }, 'danger');
   const payBtn = () => el('button', { class: 'btn small pay', type: 'button', onclick: stop(() => payModal(o)) }, o.paySubmittedAt ? 'Check & mark paid' : 'Mark paid');
-  if (isNew(o)) {
+  if (isNew(o) && o.source === 'shop') {
     acts.push(el('button', { class: 'btn small primary', type: 'button', id: 'act-accept', onclick: stop(() => acceptSheet(o, after)) }, 'Accept'), cancel());
-  } else if (o.status === 'accepted') {
+  } else if (o.status === 'accepted' || isNew(o)) { // orders you take yourself start here
     if (!o.paid) acts.push(payBtn());
     acts.push(el('button', { class: 'btn small primary', type: 'button', id: 'act-otw', onclick: stop(async () => { await setStatus(o, 'ready'); done(); }) }, readyLabel(o)));
     acts.push(cancel());
@@ -753,7 +794,7 @@ function ticket(o) {
       unread ? el('span', { class: 'tag msg', text: '💬 ' + unread }) : null,
       payPill(o)),
     el('div', { class: 't-body' },
-      stepText(o) ? el('div', { class: 'stepnow', text: stepText(o) }) : isNew(o) && !isCancelled(o) ? el('div', { class: 'stepnow new', text: 'New · accept or cancel' }) : null,
+      stepText(o) ? el('div', { class: 'stepnow', text: stepText(o) }) : isNew(o) && !isCancelled(o) && o.source === 'shop' ? el('div', { class: 'stepnow new', text: 'New · accept or cancel' }) : null,
       el('div', { class: 'who' }, whoAvatar(o, 'sm'), el('span', { class: 'who-nm' }, o.customerName || 'Walk-in', o.phone ? el('small', { text: o.phone }) : null)),
       o.address ? el('div', { class: 'addr', text: o.address }) : null,
       slotText(o) ? el('div', { class: 'when', text: '🕒 ' + slotText(o) }) : null,
@@ -813,7 +854,8 @@ function orderSheet(o0) {
       el('div', { class: 'btns' },
         o.phone ? el('a', { class: 'btn small', href: 'tel:' + o.phone.replace(/[^\d+]/g, '') }, '📞 Call') : null,
         o.phone ? el('button', { class: 'btn small', type: 'button', onclick: () => copyText(o.phone) }, 'Copy number') : null,
-        o.clientId ? el('button', { class: 'btn small', type: 'button', id: 'od-msg', onclick: () => chatSheet(o.clientId, o.no) }, '💬 Message' + (unread ? ` (${unread})` : '')) : null),
+        o.clientId ? el('button', { class: 'btn small', type: 'button', id: 'od-msg', onclick: () => chatSheet(o.clientId, o.no) }, '💬 Message' + (unread ? ` (${unread})` : '')) : null,
+        o.clientId && o.clientLogin === 'guest' ? el('button', { class: 'btn small link-btn', type: 'button', id: 'od-link', onclick: () => linkSheet(o) }, isLinked(o) ? '🔗 Linked · change' : '🔗 Link to customer') : null),
       o.type === 'delivery' ? el('div', { class: 'od-row' }, el('span', { class: 'sub', text: 'Deliver to' }), el('b', { text: o.address || '—' })) : el('div', { class: 'od-row' }, el('span', { class: 'sub', text: 'Pickup' }), el('b', { text: 'At the kitchen' })),
       el('div', { class: 'od-row' }, el('span', { class: 'sub', text: 'Time' }), el('b', { text: slotText(o) || [dayLabel(o.slotDate || isoDay(o.createdAt)), o.slot].filter(Boolean).join(' · ') || 'Not set' }))),
     el('section', { class: 'od-sect' }, el('h3', { text: 'Items' }), el('ul', { class: 'lines' }, itemLines(o)),
@@ -825,6 +867,37 @@ function orderSheet(o0) {
     el('div', { class: 'actions' },
       !isCancelled(o) && !isNew(o) && o.status !== 'accepted' && !isComplete(o) ? confirmBtn('Cancel order', 'Cancel it?', async () => { await setStatus(o, 'cancelled'); again(); }, 'danger left') : null,
       el('button', { class: 'btn', type: 'button', onclick: closeModal }, 'Close'))));
+}
+/* Link: connect a shop account (guest) to one of your customers */
+const isLinked = o => { const c = custOf(o); return !!(c && c.notes !== 'Signed up in the shop'); };
+function linkSheet(o) {
+  const words = s => String(s || '').toLowerCase().replace(/[_\-.]+/g, ' ').split(/\s+/).filter(w => w.length > 1);
+  let q = o.customerName || '';
+  const list = el('div', { class: 'link-list' });
+  const input = el('input', { id: 'link-q', type: 'search', value: q, placeholder: 'Search your customers', 'aria-label': 'Search customers', oninput: e => { q = e.target.value; draw(); } });
+  function draw() {
+    const ws = words(q), qq = q.trim().toLowerCase();
+    const pool = S.customers.filter(c => c.notes !== 'Signed up in the shop');
+    const score = c => { const n = (c.name || '').toLowerCase(); if (!qq) return 1; if (n === qq) return 100; let sc = n.includes(qq) ? 50 : 0; for (const w of ws) if (n.includes(w)) sc += 10; if ((c.phone || '').includes(qq)) sc += 40; return sc; };
+    const hits = pool.map(c => [score(c), c]).filter(([sc]) => sc > 0).sort((a, b) => b[0] - a[0] || (a[1].name || '').localeCompare(b[1].name || '')).slice(0, 40);
+    list.replaceChildren(...(hits.length ? hits.map(([, c]) => el('button', { class: 'link-row', type: 'button', 'data-id': c.id, onclick: () => doLink(c) },
+      avatar(c, 'sm'), el('span', { class: 'lr-mid' }, el('b', { text: c.name || 'Customer' }), el('small', { text: [c.phone, c.address].filter(Boolean).join(' · ') || ' ' })), el('span', { class: 'chev', text: '›' })))
+      : [el('div', { class: 'sub', style: 'padding:12px', text: 'No match. Try part of the name, or the phone number.' })]));
+  }
+  async function doLink(c) {
+    if (!sb || navigator.onLine === false) return toast('Linking needs internet.', true);
+    try {
+      const { error } = await sb.rpc('link_customer', { p_order_id: o.id, p_customer_id: c.id });
+      if (error) throw error;
+      toast(`Linked to ${c.name}`); closeModal(); Sync.soon(0);
+    } catch (e) { toast('Could not link: ' + ((e && e.message) || e), true); }
+  }
+  draw();
+  openModal(el('div', { class: 'sheet' }, el('h2', { text: '🔗 Link to a customer' }),
+    el('div', { class: 'sub', text: `This guest typed "${o.customerName || ''}". Pick who it is: their name and photo will show on this order, their earlier and future orders, and on their phone.` }),
+    input, list,
+    el('div', { class: 'actions' }, el('button', { class: 'btn', type: 'button', onclick: closeModal }, 'Close'))));
+  setTimeout(() => input.focus(), 50);
 }
 /* Delivered / Picked up, with an optional photo the client can see */
 function deliveredModal(o0) {
@@ -1074,7 +1147,7 @@ async function saveOrder() {
   const order = {
     id: newId(), no, customerId: cid || null, customerName: name || 'Walk-in', phone, address: addr, type: d.type,
     items: d.lines.map(l => { const m = M.menu.get(l.menuId) || {}; return { menuId: l.menuId, name: l.name, variant: l.variant, price: l.price, qty: l.qty, kitchen: m.kitchen === 'pizza' ? 'pizza' : 'other', ing: clone(m.ingredients || []) }; }),
-    subtotal: t.sub, fee: t.fee, total: t.total, note: d.note.trim(), status: 'new', createdAt: now,
+    subtotal: t.sub, fee: t.fee, total: t.total, note: d.note.trim(), status: 'accepted', createdAt: now,
   };
   if (d.slot || (d.slotDate && d.slotDate !== isoDay(now))) Object.assign(order, { slotDate: d.slotDate, slot: d.slot || '', slotTouched: true });
   if (await write(Store.put('orders', order), `Order ${orderNo(no)} saved`)) {
@@ -2025,6 +2098,9 @@ function settingsModal() {
     el('div', { class: 'sect' }, el('h3', { text: 'Delivery addresses' }),
       el('div', { class: 'sub', text: 'Only these can be picked for a delivery. 🍛 = fee for other dishes, 🍕 = fee when the order has pizza (empty = same). 0 = free.' }),
       abox, el('button', { class: 'link', type: 'button', style: 'align-self:flex-start', onclick: () => { addrs.push({ id: newId(), name: '', fee: '', was: '' }); drawAddrs(); const ins = abox.querySelectorAll('.addr-row input:not([type=number])'); if (ins.length) ins[ins.length - 1].focus(); } }, '+ Add address')),
+    el('div', { class: 'sect' }, el('h3', { text: 'Sound alerts' }),
+      el('label', { class: 'switch' }, el('input', { type: 'checkbox', id: 's-sound', checked: Sound.on(), onchange: e => { Sound.set(e.target.checked); if (e.target.checked) Sound.play('order'); } }), 'Play a sound for new shop orders and payments'),
+      el('div', { class: 'sub', text: 'On this device, while the app is open.' })),
     el('div', { class: 'sect' }, el('h3', { text: 'Pickup' }),
       el('label', { class: 'switch' }, el('input', { type: 'checkbox', id: 's-pickup', checked: s.pickup !== false, onchange: e => { s.pickup = e.target.checked; } }), 'Pickup available'),
       el('div', { class: 'sub', text: 'Off: customers can only choose delivery, and Pickup disappears everywhere. Turn it on again any time.' })),

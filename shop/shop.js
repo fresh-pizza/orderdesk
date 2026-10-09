@@ -11,7 +11,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   phoneDomain: 'phone.orderdesk.app', // phone logins are stored as <digits>@this, no SMS involved
 };
-const SHOP_VERSION = '1.7.0';
+const SHOP_VERSION = '1.8.0';
 
 /* ---------- helpers ---------- */
 function el(tag, props, ...kids) {
@@ -116,6 +116,41 @@ const Picker = (() => {
   return { scan, enhance };
 })();
 
+/* ---------- sounds (made in the browser, no files) ---------- */
+const Sound = (() => {
+  let ctx = null;
+  const KEY = 'od-sound';
+  const on = () => { try { return localStorage.getItem(KEY) !== 'off'; } catch (_) { return true; } };
+  const set = v => { try { localStorage.setItem(KEY, v ? 'on' : 'off'); } catch (_) { /* fine */ } };
+  function unlock() { // phones only allow sound after the first tap
+    try { if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)(); if (ctx.state === 'suspended') ctx.resume(); } catch (_) { ctx = null; }
+  }
+  ['pointerdown', 'keydown', 'touchstart'].forEach(ev => document.addEventListener(ev, unlock, { passive: true }));
+  function tone(freq, start, dur, type = 'sine', vol = 0.25) {
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = type; o.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, ctx.currentTime + start);
+    g.gain.exponentialRampToValueAtTime(vol, ctx.currentTime + start + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + start + dur);
+    o.connect(g); g.connect(ctx.destination); o.start(ctx.currentTime + start); o.stop(ctx.currentTime + start + dur + 0.05);
+  }
+  const TUNES = {
+    order: [[659, 0, .18], [880, .16, .18], [1047, .32, .35]],          // new order: rising three notes
+    paid: [[1319, 0, .12, 'triangle'], [1760, .1, .4, 'triangle']],     // payment: bright "ding-ding"
+    placed: [[784, 0, .15], [1047, .14, .3]],
+    accepted: [[523, 0, .15], [659, .14, .15], [784, .28, .3]],
+    otw: [[880, 0, .12], [880, .18, .12], [1175, .36, .3]],
+    done: [[784, 0, .15], [988, .14, .15], [1175, .28, .15], [1568, .42, .4]],
+    msg: [[1047, 0, .12, 'triangle'], [1319, .1, .2, 'triangle']],
+  };
+  function play(name) {
+    if (!on()) return;
+    try { if (navigator.vibrate) navigator.vibrate(name === 'order' || name === 'paid' ? [120, 60, 120] : 80); } catch (_) { /* fine */ }
+    try { unlock(); if (!ctx) return; for (const [f, s, d, t] of TUNES[name] || TUNES.msg) tone(f, s, d, t); } catch (_) { /* no sound */ }
+  }
+  return { play, on, set };
+})();
+
 /* ---------- state ---------- */
 const S = {
   biz: { name: '', currency: '¥', addresses: [], pay: {} }, menu: [], cat: 'All', view: 'menu',
@@ -185,7 +220,7 @@ function renderTop() {
 function whoAmI() {
   const u = S.session && S.session.user;
   if (!u) return null;
-  if (u.is_anonymous) return { kind: 'Guest', id: 'Guest on this phone' };
+  if (u.is_anonymous) return { kind: 'Guest', id: S.profile && S.profile.name ? S.profile.name : 'Guest on this phone' };
   const e = u.email || '';
   return e.endsWith('@' + CFG.phoneDomain) ? { kind: 'Phone', id: e.replace('@' + CFG.phoneDomain, '') } : { kind: 'Email', id: e };
 }
@@ -201,7 +236,9 @@ function viewMe(root) {
   }
   const un = unreadMsgs();
   root.append(
-    el('div', { class: 'box' }, el('div', { class: 'acct-card' }, el('span', { class: 'acct-kind', text: me.kind }), el('b', { id: 'me-id', text: me.id })),
+    el('div', { class: 'box' }, el('div', { class: 'acct-card' + (S.profile && S.profile.photo ? ' has-pic' : '') },
+        S.profile && S.profile.photo ? el('img', { class: 'me-pic', src: publicUrl(S.profile.photo), alt: '' }) : null,
+        el('div', {}, el('span', { class: 'acct-kind', text: me.kind === 'Guest' ? 'Guest · this phone' : me.kind }), el('b', { id: 'me-id', text: me.id }))),
       me.kind === 'Guest' ? el('p', { class: 'fineprint', text: 'Guest orders are saved on this phone only. Create a phone or email account to see your orders on any phone.' }) : null,
       el('div', { class: 'btnrow' },
         me.kind === 'Guest' ? el('button', { class: 'btn', type: 'button', onclick: () => authSheet(() => render()) }, 'Use phone or email') : null,
@@ -495,9 +532,9 @@ function viewCheckout(root) {
         all.length && !todayOpen.length ? el('div', { class: 'fineprint', id: 'c-tomorrow', text: 'Today\'s times have passed, so the earliest is tomorrow.' }) : null,
         clash ? el('div', { class: 'err', text: 'These dishes are served at different times. Please order them separately.' }) : null)),
     el('div', { class: 'box' }, el('h2', {}, el('span', { class: 'stepn', text: '3' }), 'Your details'),
-      fld('c-name', 'WeChat name', 'name', { autocomplete: 'nickname', placeholder: 'Your WeChat name', maxlength: 80 }),
-      el('div', { class: 'fineprint', style: 'margin-top:-6px', text: 'Your WeChat name helps us find you and deliver your order.' }),
-      fld('c-phone', 'Phone (for the rider)', 'phone', { type: 'tel', inputmode: 'tel', autocomplete: 'tel' }),
+      fld('c-name', 'Name', 'name', { autocomplete: 'nickname', placeholder: 'Your WeChat name', maxlength: 80 }),
+      el('div', { class: 'fineprint', style: 'margin-top:-6px', text: 'Preferably your WeChat name: it makes it easy to track and deliver your parcel correctly.' }),
+      fld('c-phone', 'Phone (optional)', 'phone', { type: 'tel', inputmode: 'tel', autocomplete: 'tel', placeholder: 'Optional' }),
       el('div', { class: 'field' }, el('label', { for: 'c-note', text: 'Note for the kitchen (optional)' }),
         el('textarea', { id: 'c-note', value: d.note || '', placeholder: 'Less spicy, extra raita…', oninput: e => { d.note = e.target.value; store.set('draft', d); } }))),
     el('div', { class: 'box sumbox' },
@@ -513,8 +550,7 @@ async function placeOrder(err) {
   err.textContent = '';
   if (d.type === 'delivery' && addrFee(d.address) === null) { err.textContent = 'Choose your delivery address.'; return; }
   if (orderWindows().list.length && !d.slot) { err.textContent = `Choose a ${d.type === 'delivery' ? 'delivery' : 'pickup'} time.`; return; }
-  if (!(d.name || '').trim()) { err.textContent = 'Please add your WeChat name.'; $('#c-name').focus(); return; }
-  if ((d.phone || '').replace(/\D/g, '').length < 5) { err.textContent = 'Please add your phone number.'; return; }
+  if (!(d.name || '').trim()) { err.textContent = 'Please add your name (your WeChat name is best).'; $('#c-name').focus(); return; }
   if (!S.session) { authSheet(() => placeOrder(err)); return; }
   const btn = $('#c-place'); btn.disabled = true; btn.textContent = 'Placing your order…';
   try {
@@ -525,6 +561,9 @@ async function placeOrder(err) {
     if (error) throw error;
     S.lastOrder = data; S.basket = []; d.note = ''; saveBasket();
     S.orders = [data, ...S.orders.filter(o => o.id !== data.id)];
+    if (!S.profile) S.profile = { name: data.customer_name }; else if (!S.profile.photo) S.profile.name = data.customer_name;
+    lastStatus.set(data.id, data.status);
+    Sound.play('placed');
     go('done');
     payModal(data); // offer to pay now (Pay later is the first choice)
   } catch (e) { err.textContent = niceErr(e); btn.disabled = false; btn.textContent = 'Place order'; }
@@ -582,8 +621,9 @@ async function onSession(session) {
   if (!session) { S.orders = []; return; }
   // fill in name / phone / address from the profile the shop keeps for this account
   try {
-    const { data } = await sb.from('customers').select('name,phone,address').limit(1);
+    const { data } = await sb.from('customers').select('name,phone,address,photo').limit(1);
     const p = data && data[0];
+    S.profile = p || null;
     if (p) { if (!S.draft.name) S.draft.name = p.name || ''; if (!S.draft.phone) S.draft.phone = p.phone || ''; if (!S.draft.address && addrFee(p.address) !== null) S.draft.address = p.address; }
   } catch (_) { /* fine */ }
   listen(); loadOrders(); loadMsgs();
@@ -766,12 +806,25 @@ function viewOrders(root) {
   if (past.length) root.append(el('h2', { class: 'sect-h', text: 'Earlier' }), ...past.map(orderCard));
 }
 let ordersSig = '';
+const lastStatus = new Map();
 async function loadOrders() {
   if (!sb || !S.session) return;
   try {
     const { data, error } = await sb.from('orders').select('*').eq('deleted', false).order('created_at', { ascending: false }).limit(50);
     if (error) throw error;
     S.orders = data || [];
+    // sounds when the kitchen moves an order along
+    let tune = '', msg = '';
+    for (const o of S.orders) {
+      const was = lastStatus.get(o.id);
+      if (was && was !== o.status) {
+        if (o.status === 'accepted') { tune = 'accepted'; msg = `Order #${pad3(o.no)} accepted`; }
+        else if (o.status === 'ready') { tune = 'otw'; msg = o.type === 'delivery' ? `Order #${pad3(o.no)} is on the way` : `Order #${pad3(o.no)} is ready`; }
+        else if (o.status === 'done') { tune = 'done'; msg = `Order #${pad3(o.no)} delivered. Enjoy!`; }
+      }
+      lastStatus.set(o.id, o.status);
+    }
+    if (tune) { Sound.play(tune); toast(msg); }
     if (S.lastOrder) S.lastOrder = S.orders.find(o => o.id === S.lastOrder.id) || S.lastOrder;
     const sig = JSON.stringify(S.orders.map(o => [o.id, o.status, o.paid, o.pay_submitted_at, o.delivery_proof]));
     const changed = sig !== ordersSig; ordersSig = sig;

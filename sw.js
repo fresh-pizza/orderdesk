@@ -1,5 +1,5 @@
 /* Order Desk service worker: keeps the app itself on the device so it opens with no internet. */
-const VERSION = 'od-2.7.0';
+const VERSION = 'od-2.8.0';
 const SHELL = ['./', 'index.html', 'app.css', 'app.js', 'supabase.js', 'manifest.webmanifest',
   'icon-192.png', 'apple-touch-icon.png', 'pay-wechat.png', 'pay-alipay.png',
   'bricolage-grotesque-latin-600-normal.woff2', 'bricolage-grotesque-latin-700-normal.woff2',
