@@ -11,7 +11,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   phoneDomain: 'phone.orderdesk.app', // phone logins are stored as <digits>@this, no SMS involved
 };
-const SHOP_VERSION = '1.4.0';
+const SHOP_VERSION = '1.5.0';
 
 /* ---------- helpers ---------- */
 function el(tag, props, ...kids) {
@@ -58,13 +58,70 @@ function dayLabel(day) {
   return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
 }
 
+/* ---------- modern pickers: every <select> becomes a button that opens a bottom sheet ---------- */
+const Picker = (() => {
+  function labelOf(sel) {
+    if (sel.getAttribute('aria-label')) return sel.getAttribute('aria-label');
+    const l = sel.id && document.querySelector(`label[for="${sel.id}"]`);
+    if (l) return l.textContent;
+    const f = sel.closest('.field'); const fl = f && f.querySelector('label');
+    return fl ? fl.textContent : 'Choose';
+  }
+  function sync(sel, btn) {
+    const o = sel.options[sel.selectedIndex];
+    const empty = !o || o.value === '';
+    btn.querySelector('.pk-val').textContent = o ? o.textContent : '';
+    btn.classList.toggle('empty', empty);
+    btn.disabled = sel.disabled;
+  }
+  function open(sel, btn) {
+    const ov = document.createElement('div'); ov.className = 'pk-ov'; ov.id = 'picker';
+    const close = () => { ov.remove(); btn.focus(); };
+    ov.addEventListener('mousedown', e => { if (e.target === ov) close(); });
+    const sheet = document.createElement('div'); sheet.className = 'pk-sheet'; sheet.setAttribute('role', 'listbox');
+    const h = document.createElement('div'); h.className = 'pk-h'; h.textContent = labelOf(sel); sheet.append(h);
+    const list = document.createElement('div'); list.className = 'pk-list';
+    [...sel.options].forEach(o => {
+      if (o.value === '') return; // placeholder rows like "Choose…" stay as the button text only
+      const b = document.createElement('button'); b.type = 'button'; b.className = 'pk-opt' + (o.selected && o.value !== '' ? ' on' : '');
+      b.setAttribute('role', 'option'); b.setAttribute('aria-selected', String(o.selected)); b.dataset.value = o.value; b.disabled = o.disabled;
+      const t = document.createElement('span'); t.textContent = o.textContent; b.append(t);
+      const ck = document.createElement('i'); ck.textContent = '✓'; b.append(ck);
+      b.addEventListener('click', () => { sel.value = o.value; sync(sel, btn); close(); sel.dispatchEvent(new Event('change', { bubbles: true })); });
+      list.append(b);
+    });
+    sheet.append(list);
+    const c = document.createElement('button'); c.type = 'button'; c.className = 'pk-cancel'; c.textContent = 'Cancel'; c.addEventListener('click', close); sheet.append(c);
+    ov.append(sheet); document.body.append(ov);
+    const on = list.querySelector('.on'); if (on) on.scrollIntoView({ block: 'center' });
+    document.addEventListener('keydown', function esc(e) { if (e.key === 'Escape') { e.stopPropagation(); close(); document.removeEventListener('keydown', esc, true); } }, true);
+  }
+  function enhance(sel) {
+    if (sel.dataset.pk) return; sel.dataset.pk = '1';
+    const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'pk-btn';
+    if (sel.id) btn.id = sel.id + '-pk';
+    btn.setAttribute('aria-haspopup', 'listbox'); btn.setAttribute('aria-label', labelOf(sel));
+    const v = document.createElement('span'); v.className = 'pk-val'; btn.append(v);
+    const ch = document.createElement('i'); ch.className = 'pk-ch'; ch.setAttribute('aria-hidden', 'true'); btn.append(ch);
+    sel.classList.add('pk-native'); sel.tabIndex = -1; sel.setAttribute('aria-hidden', 'true');
+    sel.after(btn); sync(sel, btn);
+    btn.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); open(sel, btn); });
+    sel.addEventListener('change', () => sync(sel, btn));
+  }
+  const scan = root => { if (root.tagName === 'SELECT') enhance(root); else if (root.querySelectorAll) root.querySelectorAll('select').forEach(enhance); };
+  new MutationObserver(ms => { for (const m of ms) for (const n of m.addedNodes) if (n.nodeType === 1) scan(n); }).observe(document.documentElement, { childList: true, subtree: true });
+  document.addEventListener('DOMContentLoaded', () => scan(document.body));
+  if (document.body) scan(document.body);
+  return { scan, enhance };
+})();
+
 /* ---------- state ---------- */
 const S = {
   biz: { name: '', currency: '¥', addresses: [], pay: {} }, menu: [], cat: 'All', view: 'menu',
   basket: store.get('basket', []), // [{menuId, variant, qty}]
   draft: Object.assign({ type: 'delivery', address: '', slotDate: '', slot: '', note: '', name: '', phone: '' }, store.get('draft', {})),
   session: null, orders: [], lastOrder: null, loaded: false, loadErr: '',
-  msgs: [], msgsOff: false, chatAbout: null, reviews: [], reviewsOff: false,
+  msgs: [], msgsOff: false, chatAbout: null, reviews: [], reviewsOff: false, sales: new Map(),
 };
 const money = n => { n = Number(n) || 0; const a = Math.abs(n); return (n < 0 ? '−' : '') + (S.biz.currency || '') + (Number.isInteger(a) ? a : a.toFixed(2)); };
 const feeText = f => (f ? money(f) : 'Free');
@@ -184,27 +241,54 @@ function reviewEl(r) {
     r.body ? el('div', { class: 'rev-t', text: r.body }) : null,
     r.photo ? el('img', { class: 'rev-img', src: publicUrl(r.photo), alt: 'Photo from a customer', loading: 'lazy' }) : null);
 }
-/* the dish, full screen: photo, details, ingredients, reviews */
+async function loadSales() {
+  try { const { data, error } = await sb.rpc('dish_sales'); if (!error && data) S.sales = new Map(data.map(r => [r.menu_id, Number(r.sold) || 0])); } catch (_) { /* fine */ }
+}
+const soldText = n => (n >= 100 ? `${Math.floor(n / 100) * 100}+` : n >= 10 ? `${Math.floor(n / 10) * 10}+` : String(n));
+/* the dish page: like a delivery app — photo, price card, tags, info, ingredients, reviews, bottom bar */
 function dishSheet(m) {
   const vs = (m.variants || []).map(v => num(v.price)), lo = Math.min(...vs), hi = Math.max(...vs);
-  const rs = reviewsOf(m.id), r = ratingOf(m.id);
-  const pic = m.photo ? el('img', { class: 'ds-img', src: publicUrl(m.photo), alt: m.name }) : el('div', { class: 'ds-img ph', style: '--h:' + hue(m.name), text: initial(m.name) });
-  openModal(el('div', { class: 'sheet dsheet' },
-    el('button', { class: 'ds-x', type: 'button', 'aria-label': 'Close', onclick: closeModal }, '✕'),
-    pic,
-    el('div', { class: 'ds-body' },
-      el('div', { class: 'ds-top' }, el('h2', { text: m.name }),
-        hasNight() ? el('span', { class: 'svc-pill ' + svcOf(m), text: svcOf(m) === 'night' ? '🌙 Night' : '☀ Day' }) : null),
-      r ? el('div', { class: 'rating big' }, el('span', { class: 'stars', text: starStr(Math.round(r.avg)) }), ` ${r.avg} · ${r.n} review${r.n === 1 ? '' : 's'}`) : null,
-      el('div', { class: 'ds-price', text: vs.length ? (lo === hi ? money(lo) : `${money(lo)} – ${money(hi)}`) : '' }),
-      m.description ? el('p', { class: 'ds-desc', text: m.description }) : null,
-      (m.windows || []).length ? el('div', { class: 'win', text: '🕒 ' + m.windows.map(winLabel).join(', ') }) : null,
-      (m.ingredients || []).length ? el('section', { class: 'ds-sect' }, el('h3', { text: 'Ingredients' }),
-        el('div', { class: 'ing-chips' }, m.ingredients.map(g => el('span', { class: 'ing-chip', text: g.item })))) : null,
-      el('section', { class: 'ds-sect' }, el('h3', { text: rs.length ? `Reviews (${rs.length})` : 'Reviews' }),
-        rs.length ? rs.slice(0, 30).map(reviewEl) : el('div', { class: 'fineprint', text: 'No reviews yet. Be the first after your order arrives.' }))),
-    el('div', { class: 'ds-foot' }, m.available === false ? el('div', { class: 'fineprint', text: 'Sold out today' })
-      : el('button', { class: 'btn primary big-btn', type: 'button', id: 'ds-add', onclick: () => { closeModal(); addDish(m); } }, `Add to basket · ${vs.length ? money(lo) : ''}${lo !== hi ? '+' : ''}`))));
+  const rs = reviewsOf(m.id), r = ratingOf(m.id), good = rs.length ? Math.round(100 * rs.filter(x => x.stars >= 4).length / rs.length) : 0;
+  const sold = S.sales.get(m.id) || 0, night = svcOf(m) === 'night';
+  const fees = (S.biz.addresses || []).map(a => num(a.fee)), minFee = fees.length ? Math.min(...fees) : 0;
+  const pic = m.photo ? el('img', { class: 'dd-img', src: publicUrl(m.photo), alt: m.name }) : el('div', { class: 'dd-img ph', style: '--h:' + hue(m.name), text: initial(m.name) });
+  const ingCard = el('div', { class: 'dd-card', id: 'dd-ing' }, el('h3', { text: 'Ingredients' }),
+    (m.ingredients || []).length ? el('div', { class: 'dd-grid' }, m.ingredients.map(g => el('div', { class: 'dd-cell' }, el('b', { text: g.item }), el('small', { text: 'Ingredient' }))))
+      : el('div', { class: 'fineprint', text: 'Ask us in Messages if you want to know what is inside.' }));
+  const scroller = el('div', { class: 'dd-scroll' });
+  const tabs = el('div', { class: 'dd-tabs' });
+  const drawTabs = k => tabs.replaceChildren(el('button', { type: 'button', 'aria-pressed': k === 'photo', onclick: () => { scroller.scrollTo({ top: 0, behavior: 'smooth' }); drawTabs('photo'); } }, 'Photo'),
+    el('button', { type: 'button', id: 'dd-tab-ing', 'aria-pressed': k === 'ing', onclick: () => { ingCard.scrollIntoView({ behavior: 'smooth', block: 'start' }); drawTabs('ing'); } }, 'Ingredients'));
+  drawTabs('photo');
+  const add = then => { closeModal(); addDish(m); if (then) then(); };
+  const n = basketCount();
+  scroller.append(
+    el('div', { class: 'dd-hero' }, pic, tabs),
+    el('div', { class: 'dd-price-card' },
+      el('div', {}, el('div', { class: 'dd-price' }, el('small', { text: S.biz.currency || '' }), vs.length ? String(lo) : '', lo !== hi ? el('span', { class: 'dd-from', text: ` – ${hi}` }) : null),
+        el('div', { class: 'dd-sold', text: sold ? `Sold ${soldText(sold)} this month` : 'Freshly made to order' })),
+      el('div', { class: 'dd-badge ' + (night ? 'night' : 'day') }, el('b', { text: night ? '🌙 Night' : '☀ Day' }), el('small', { text: night ? 'Evening dish' : 'Daytime dish' }))),
+    el('div', { class: 'dd-card' }, el('h2', { class: 'dd-name', text: m.name }),
+      el('div', { class: 'dd-tags' }, el('span', { class: 'dd-tag', text: m.category || 'Dish' }), r ? el('span', { class: 'dd-tag', text: `★ ${r.avg}` }) : null,
+        ...(m.variants || []).filter(v => v.label).map(v => el('span', { class: 'dd-tag', text: `${v.label} ${money(v.price)}` }))),
+      m.description ? el('p', { class: 'dd-desc', text: m.description }) : null),
+    el('div', { class: 'dd-card' },
+      el('div', { class: 'dd-info' }, el('span', { text: '🛵' }), el('b', { text: minFee ? `Delivery from ${money(minFee)}` : 'Free delivery' }), el('span', { class: 'dot' }), el('span', { class: 'fineprint', text: (S.biz.addresses || []).length + ' delivery points' })),
+      (m.windows || []).length ? el('div', { class: 'dd-info' }, el('span', { text: '🕒' }), el('b', { text: 'Served' }), el('span', { text: m.windows.map(winLabel).join(', ') })) : null,
+      el('div', { class: 'dd-info' }, el('span', { text: '✅' }), el('b', { text: 'Pay after we accept' }), el('span', { class: 'fineprint', text: 'WeChat Pay · Alipay' }))),
+    ingCard,
+    el('div', { class: 'dd-card' }, el('div', { class: 'dd-rev-h' }, el('h3', { text: `Reviews (${rs.length})` }), rs.length ? el('span', { class: 'dd-good', text: `${good}% positive 👍` }) : null),
+      rs.length ? rs.slice(0, 30).map(reviewEl) : el('div', { class: 'fineprint', text: 'No reviews yet. Be the first after your order arrives.' })));
+  const iconBtn = (ic, label, fn, badge) => el('button', { class: 'dd-ic', type: 'button', 'aria-label': label, onclick: fn }, el('span', { class: 'dd-ic-i', text: ic }), el('small', { text: label }), badge ? el('span', { class: 'tbadge', text: badge }) : null);
+  openModal(el('div', { class: 'sheet dd shop-dd', id: 'dsheet' },
+    el('div', { class: 'dd-top' }, el('button', { class: 'dd-round ds-x', type: 'button', 'aria-label': 'Close', onclick: closeModal }, '⌄')),
+    scroller,
+    el('div', { class: 'dd-bar shop' },
+      iconBtn('🛍', 'Basket', () => { closeModal(); if (basketCount()) go('checkout'); }, n || null),
+      S.msgsOff ? null : iconBtn('💬', 'Ask us', () => { closeModal(); openChat(null); }),
+      m.available === false ? el('div', { class: 'dd-soldout', text: 'Sold out today' }) : el('div', { class: 'dd-buy' },
+        el('button', { class: 'dd-add', type: 'button', id: 'ds-add', onclick: () => add() }, 'Add to basket'),
+        el('button', { class: 'dd-now', type: 'button', id: 'ds-now', onclick: () => add(() => { if (basketCount()) go('checkout'); }) }, 'Buy now')))));
 }
 /* after delivery: the customer reviews the order */
 function reviewSheet(o) {
@@ -340,6 +424,7 @@ function orderWindows() {
 function viewCheckout(root) {
   const d = S.draft;
   if (!basketCount()) { root.append(el('div', { class: 'empty' }, el('b', { text: 'Your basket is empty' }), el('button', { class: 'btn primary', type: 'button', onclick: () => go('menu') }, 'Back to the menu'))); return; }
+  if (!S.biz.pickup) d.type = 'delivery';
   if (d.address && addrFee(d.address) === null) d.address = '';
   if (!d.slotDate) d.slotDate = isoDay(Date.now());
   const { list, clash } = orderWindows();
@@ -362,9 +447,9 @@ function viewCheckout(root) {
   root.append(
     el('div', { class: 'box' }, el('h2', {}, el('span', { class: 'stepn', text: '1' }), 'Your order'), lines,
       el('button', { class: 'link', type: 'button', style: 'align-self:flex-start', onclick: () => go('menu') }, '+ Add more')),
-    el('div', { class: 'box' }, el('h2', {}, el('span', { class: 'stepn', text: '2' }), 'Delivery or pickup'),
-      el('div', { class: 'seg', role: 'group', 'aria-label': 'Delivery or pickup' }, [['delivery', 'Delivery'], ['pickup', 'Pickup']].map(([k, lbl]) =>
-        el('button', { type: 'button', 'aria-pressed': d.type === k, onclick: () => { d.type = k; render(); } }, lbl))),
+    el('div', { class: 'box' }, el('h2', {}, el('span', { class: 'stepn', text: '2' }), S.biz.pickup ? 'Delivery or pickup' : 'Delivery'),
+      S.biz.pickup ? el('div', { class: 'seg', role: 'group', 'aria-label': 'Delivery or pickup' }, [['delivery', 'Delivery'], ['pickup', 'Pickup']].map(([k, lbl]) =>
+        el('button', { type: 'button', 'aria-pressed': d.type === k, onclick: () => { d.type = k; render(); } }, lbl))) : null,
       d.type === 'delivery' ? el('div', { class: 'field' }, el('label', { for: 'c-addr', text: 'Delivery address' }),
         el('select', { id: 'c-addr', onchange: e => { d.address = e.target.value; render(); } },
           el('option', { value: '', text: 'Choose your address…' }),
@@ -618,7 +703,7 @@ function orderCard(o) {
   return el('article', { class: 'ocard', 'data-no': o.no },
     el('div', { class: 'oh' }, el('span', { class: 't-no', text: '#' + pad3(o.no) }),
       el('span', { class: 'sub', text: new Date(o.created_at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) + ' ' + timeStr(Date.parse(o.created_at)) }),
-      el('span', { class: 'tag', style: 'margin-left:auto', text: o.type === 'delivery' ? 'Delivery' : 'Pickup' })),
+      S.biz.pickup || o.type === 'pickup' ? el('span', { class: 'tag', style: 'margin-left:auto', text: o.type === 'delivery' ? 'Delivery' : 'Pickup' }) : null),
     o.status === 'cancelled' ? el('div', { class: 'err', text: 'Cancelled' })
       : el('div', {}, el('div', { class: 'ostatus', text: statusLine(o) }),
         el('div', { class: 'steps' }, STEPS.map((s, i) => el('span', { class: i <= idx ? 'on' : '' }))),
@@ -735,9 +820,9 @@ async function loadShop() {
     if (st.error) throw st.error; if (mn.error) throw mn.error;
     const b = (st.data || [])[0] || {};
     S.biz = { name: b.name || '', currency: b.currency ?? '¥', addresses: Array.isArray(b.addresses) ? b.addresses : [],
-      pay: { wechatQr: b.pay_wechat_qr || '', alipayQr: b.pay_alipay_qr || '', wechatId: b.pay_wechat_id || '', alipayId: b.pay_alipay_id || '' } };
+      pay: { wechatQr: b.pay_wechat_qr || '', alipayQr: b.pay_alipay_qr || '', wechatId: b.pay_wechat_id || '', alipayId: b.pay_alipay_id || '' }, pickup: b.pickup !== false };
     S.menu = mn.data || [];
-    await loadReviews();
+    await Promise.all([loadReviews(), loadSales()]);
     S.basket = S.basket.filter(l => dish(l.menuId));
     S.loaded = true; S.loadErr = '';
   } catch (e) { S.loadErr = niceErr(e) + ' Pull down to reload.'; }

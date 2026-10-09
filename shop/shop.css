@@ -233,3 +233,18 @@ body.shop[data-view="chat"]{padding-bottom:calc(90px + env(safe-area-inset-botto
 .star-pick button.on{color:#F0A500}
 #rv-text{min-height:80px;border:1px solid var(--line);border-radius:10px;padding:10px;background:var(--surface);color:var(--ink);font:inherit}
 .my-rev{background:none;border:1px solid var(--line);border-radius:99px;padding:6px 12px;font-size:13.5px;color:var(--ink)}
+
+/* ===== 1.5: dish page bottom bar (shop) ===== */
+.shop-dd .dd-scroll{padding:0 0 12px}
+.shop-dd .dd-scroll>.dd-card,.shop-dd .dd-scroll>.dd-price-card{margin:0 10px}
+.shop-dd .dd-hero{margin-bottom:0}
+.dd-bar.shop{gap:4px}
+.dd-ic{position:relative;display:flex;flex-direction:column;align-items:center;gap:0;background:none;border:0;padding:2px 8px;color:var(--ink)}
+.dd-ic-i{font-size:22px;line-height:1.1}
+.dd-ic small{font-size:11px;color:var(--muted)}
+.dd-ic .tbadge{top:-2px;left:calc(50% + 4px)}
+.dd-buy{margin-left:auto;display:flex;border-radius:99px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.15)}
+.dd-add{border:0;background:#2B2B2B;color:#fff;font-weight:700;font-size:15px;padding:12px 16px}
+.dd-now{border:0;background:var(--go-bg);color:#1A1A1A;font-weight:700;font-size:15px;padding:12px 18px}
+.dd-soldout{margin-left:auto;color:var(--muted);font-weight:600}
+.ds-x{font-size:22px}

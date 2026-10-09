@@ -9,9 +9,9 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   bucket: 'photos',
 };
-const VERSION = '2.4.0';
+const VERSION = '2.5.0';
 const COLLS = ['menu', 'customers', 'orders', 'settings', 'purchases'];
-const DEFAULT_SETTINGS = { id: 'main', name: 'My kitchen', currency: '¥', deliveryFee: 0, addresses: [], wechatQr: '', alipayQr: '', wechatId: '', alipayId: '' };
+const DEFAULT_SETTINGS = { id: 'main', name: 'My kitchen', currency: '¥', deliveryFee: 0, addresses: [], wechatQr: '', alipayQr: '', wechatId: '', alipayId: '', pickup: true, inventory: {} };
 
 /* ---------- tiny helpers ---------- */
 function el(tag, props, ...kids) {
@@ -98,6 +98,63 @@ const IDB = (() => {
     });
   }
   return { all, get, batch, clearAll };
+})();
+
+/* ---------- modern pickers: every <select> becomes a button that opens a bottom sheet ---------- */
+const Picker = (() => {
+  function labelOf(sel) {
+    if (sel.getAttribute('aria-label')) return sel.getAttribute('aria-label');
+    const l = sel.id && document.querySelector(`label[for="${sel.id}"]`);
+    if (l) return l.textContent;
+    const f = sel.closest('.field'); const fl = f && f.querySelector('label');
+    return fl ? fl.textContent : 'Choose';
+  }
+  function sync(sel, btn) {
+    const o = sel.options[sel.selectedIndex];
+    const empty = !o || o.value === '';
+    btn.querySelector('.pk-val').textContent = o ? o.textContent : '';
+    btn.classList.toggle('empty', empty);
+    btn.disabled = sel.disabled;
+  }
+  function open(sel, btn) {
+    const ov = document.createElement('div'); ov.className = 'pk-ov'; ov.id = 'picker';
+    const close = () => { ov.remove(); btn.focus(); };
+    ov.addEventListener('mousedown', e => { if (e.target === ov) close(); });
+    const sheet = document.createElement('div'); sheet.className = 'pk-sheet'; sheet.setAttribute('role', 'listbox');
+    const h = document.createElement('div'); h.className = 'pk-h'; h.textContent = labelOf(sel); sheet.append(h);
+    const list = document.createElement('div'); list.className = 'pk-list';
+    [...sel.options].forEach(o => {
+      if (o.value === '') return; // placeholder rows like "Choose…" stay as the button text only
+      const b = document.createElement('button'); b.type = 'button'; b.className = 'pk-opt' + (o.selected && o.value !== '' ? ' on' : '');
+      b.setAttribute('role', 'option'); b.setAttribute('aria-selected', String(o.selected)); b.dataset.value = o.value; b.disabled = o.disabled;
+      const t = document.createElement('span'); t.textContent = o.textContent; b.append(t);
+      const ck = document.createElement('i'); ck.textContent = '✓'; b.append(ck);
+      b.addEventListener('click', () => { sel.value = o.value; sync(sel, btn); close(); sel.dispatchEvent(new Event('change', { bubbles: true })); });
+      list.append(b);
+    });
+    sheet.append(list);
+    const c = document.createElement('button'); c.type = 'button'; c.className = 'pk-cancel'; c.textContent = 'Cancel'; c.addEventListener('click', close); sheet.append(c);
+    ov.append(sheet); document.body.append(ov);
+    const on = list.querySelector('.on'); if (on) on.scrollIntoView({ block: 'center' });
+    document.addEventListener('keydown', function esc(e) { if (e.key === 'Escape') { e.stopPropagation(); close(); document.removeEventListener('keydown', esc, true); } }, true);
+  }
+  function enhance(sel) {
+    if (sel.dataset.pk) return; sel.dataset.pk = '1';
+    const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'pk-btn';
+    if (sel.id) btn.id = sel.id + '-pk';
+    btn.setAttribute('aria-haspopup', 'listbox'); btn.setAttribute('aria-label', labelOf(sel));
+    const v = document.createElement('span'); v.className = 'pk-val'; btn.append(v);
+    const ch = document.createElement('i'); ch.className = 'pk-ch'; ch.setAttribute('aria-hidden', 'true'); btn.append(ch);
+    sel.classList.add('pk-native'); sel.tabIndex = -1; sel.setAttribute('aria-hidden', 'true');
+    sel.after(btn); sync(sel, btn);
+    btn.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); open(sel, btn); });
+    sel.addEventListener('change', () => sync(sel, btn));
+  }
+  const scan = root => { if (root.tagName === 'SELECT') enhance(root); else if (root.querySelectorAll) root.querySelectorAll('select').forEach(enhance); };
+  new MutationObserver(ms => { for (const m of ms) for (const n of m.addedNodes) if (n.nodeType === 1) scan(n); }).observe(document.documentElement, { childList: true, subtree: true });
+  document.addEventListener('DOMContentLoaded', () => scan(document.body));
+  if (document.body) scan(document.body);
+  return { scan, enhance };
 })();
 
 /* ---------- app state ---------- */
@@ -209,7 +266,8 @@ const MAP = {
       paid: !!x.paid, payMethod: x.pay_method || '', payProof: x.pay_proof || '', paidAt: x.paid_at ? toMs(x.paid_at) : 0, payTouched: x.paid !== undefined,
       slotDate: x.slot_date || '', slot: x.slot || '', slotTouched: x.slot !== undefined,
       source: x.source || 'admin', paySubmittedAt: tsMs(x.pay_submitted_at), clientId: x.client_id || '',
-      acceptedAt: tsMs(x.accepted_at), readyAt: tsMs(x.ready_at), doneAt: tsMs(x.done_at), deliveryProof: x.delivery_proof || '', delTouched: x.delivery_proof !== undefined }),
+      acceptedAt: tsMs(x.accepted_at), readyAt: tsMs(x.ready_at), doneAt: tsMs(x.done_at), deliveryProof: x.delivery_proof || '', delTouched: x.delivery_proof !== undefined,
+      clientLogin: x.client_login || '' }),
   },
   purchases: {
     to: r => ({ id: r.id, day: r.day || isoDay(Date.now()), item: r.item || '', qty: num(r.qty), unit: r.unit || '', cost: num(r.cost), note: r.note || '', photos: r.photos || [], created_at: toIso(r.createdAt), deleted: !!r.deleted }),
@@ -218,10 +276,13 @@ const MAP = {
   settings: {
     to: r => Object.assign({ id: 'business', name: r.name || 'My kitchen', currency: r.currency ?? '¥', delivery_fee: num(r.deliveryFee), deleted: false },
       r.addrTouched ? { addresses: r.addresses || [] } : {},
-      r.payCfgTouched ? { pay_wechat_qr: r.wechatQr || '', pay_alipay_qr: r.alipayQr || '', pay_wechat_id: r.wechatId || '', pay_alipay_id: r.alipayId || '' } : {}),
+      r.payCfgTouched ? { pay_wechat_qr: r.wechatQr || '', pay_alipay_qr: r.alipayQr || '', pay_wechat_id: r.wechatId || '', pay_alipay_id: r.alipayId || '' } : {},
+      r.pkTouched ? { pickup: r.pickup !== false } : {},
+      r.invTouched ? { inventory: r.inventory || {} } : {}),
     // one shared settings row for the whole team; older per-login rows are ignored
     from: x => ({ id: x.id === 'business' ? 'main' : '__other', name: x.name, currency: x.currency, deliveryFee: num(x.delivery_fee), addresses: Array.isArray(x.addresses) ? x.addresses : [], addrTouched: x.addresses !== undefined,
-      wechatQr: x.pay_wechat_qr || '', alipayQr: x.pay_alipay_qr || '', wechatId: x.pay_wechat_id || '', alipayId: x.pay_alipay_id || '', payCfgTouched: x.pay_wechat_qr !== undefined, deleted: false }),
+      wechatQr: x.pay_wechat_qr || '', alipayQr: x.pay_alipay_qr || '', wechatId: x.pay_wechat_id || '', alipayId: x.pay_alipay_id || '', payCfgTouched: x.pay_wechat_qr !== undefined,
+      pickup: x.pickup !== false, pkTouched: x.pickup !== undefined, inventory: x.inventory && typeof x.inventory === 'object' ? x.inventory : {}, invTouched: x.inventory !== undefined, deleted: false }),
   },
 };
 
@@ -538,14 +599,14 @@ function viewOrders(root) {
   const paidN = S.orders.filter(o => !isCancelled(o) && o.paid).length;
   const unpaidN = S.orders.filter(isUnpaid).length;
   const cancN = S.orders.filter(isCancelled).length;
-  const isDone = o => !isCancelled(o) && o.status === 'done';
+  const isDone = isComplete;
   const doneN = S.orders.filter(isDone).length;
   const filters = [['all', 'All'], ['paid', `Paid (${paidN})`], ['unpaid', `Unpaid (${unpaidN})`], ['done', `Completed (${doneN})`], ['cancelled', `Cancelled (${cancN})`]];
   if (!filters.some(([k]) => k === S.ordFilter)) S.ordFilter = 'all';
   root.append(el('div', { class: 'chips' }, filters.map(([k, label]) =>
     el('button', { class: 'chip', type: 'button', 'aria-pressed': S.ordFilter === k, onclick: () => { S.ordFilter = k; S.ordLimit = 60; render(true); } }, label))));
   if (hasNight()) {
-    const active = o => !isCancelled(o) && o.status !== 'done';
+    const active = o => !isCancelled(o) && !isComplete(o);
     const cnt = k => S.orders.filter(o => active(o) && (k === 'all' || orderSvc(o) === k)).length;
     root.append(el('div', { class: 'svc-seg', role: 'group', 'aria-label': 'Day or night orders' }, [['all', 'All'], ['day', SVC.day], ['night', SVC.night]].map(([k, l]) =>
       el('button', { type: 'button', class: 'svc-btn ' + k, id: 'svc-' + k, 'aria-pressed': S.svc === k, title: 'Open orders', onclick: () => { S.svc = k; S.ordLimit = 60; render(true); } },
@@ -595,7 +656,8 @@ const doneLabel = o => (o.type === 'delivery' ? 'Delivered' : 'Picked up');
 const readyLabel = o => (o.type === 'delivery' ? 'On the way' : 'Ready');
 const isNew = o => !['accepted', 'ready', 'done', 'cancelled'].includes(o.status);
 function stepText(o) {
-  return { accepted: o.paid ? 'Accepted · cooking' : 'Accepted · waiting for payment', ready: o.type === 'delivery' ? 'On the way' : 'Ready for pickup', done: doneLabel(o) }[o.status] || '';
+  return { accepted: o.paid ? 'Accepted · paid · cooking' : 'Accepted · not paid yet', ready: (o.type === 'delivery' ? 'On the way' : 'Ready for pickup') + (o.paid ? '' : ' · not paid yet'),
+    done: o.paid ? 'Completed' : doneLabel(o) + ' · not paid yet' }[o.status] || '';
 }
 /* Day / Night: from the dishes in the order */
 function orderSvc(o) {
@@ -617,7 +679,10 @@ function itemLines(o) {
   if (o.type === 'delivery') items.push(el('li', {}, el('span', { text: 'Delivery' }), el('span', { text: feeText(o.fee) })));
   return items;
 }
-/* the buttons for where the order is now (tickets and order details share them) */
+/* the buttons for where the order is now (tickets and order details share them)
+   New: Accept / Cancel.  Accepted: Mark paid · On the way · Cancel.  On the way: Mark paid · Delivered.
+   Paid and Delivered are separate; the order is Completed once it is both. */
+const isComplete = o => !isCancelled(o) && o.status === 'done' && o.paid;
 function orderActions(o, after) {
   const done = () => { if (after) after(); };
   const stop = fn => e => { if (e) e.stopPropagation(); fn(); };
@@ -627,22 +692,47 @@ function orderActions(o, after) {
     acts.push(confirmBtn('Delete', 'Delete for good?', async () => { if (await write(Store.remove('orders', o.id, [...photoDelOp(o.payProof), ...photoDelOp(o.deliveryProof)]), 'Order deleted')) closeModal(); }, 'danger'));
     return acts;
   }
-  const cancel = confirmBtn('Cancel', 'Sure?', async () => { await setStatus(o, 'cancelled'); done(); }, 'danger');
+  const cancel = () => confirmBtn('Cancel', 'Sure?', async () => { await setStatus(o, 'cancelled'); done(); }, 'danger');
+  const payBtn = () => el('button', { class: 'btn small pay', type: 'button', onclick: stop(() => payModal(o)) }, o.paySubmittedAt ? 'Check & mark paid' : 'Mark paid');
   if (isNew(o)) {
-    acts.push(el('button', { class: 'btn small primary', type: 'button', id: 'act-accept', onclick: stop(async () => { await setStatus(o, 'accepted'); done(); }) }, 'Accept'), cancel);
-  } else if (!o.paid && o.status === 'accepted') {
-    acts.push(el('button', { class: 'btn small pay', type: 'button', onclick: stop(() => payModal(o)) }, o.paySubmittedAt ? 'Check & mark paid' : 'Mark paid'), cancel);
+    acts.push(el('button', { class: 'btn small primary', type: 'button', id: 'act-accept', onclick: stop(() => acceptSheet(o, after)) }, 'Accept'), cancel());
   } else if (o.status === 'accepted') {
-    acts.push(el('button', { class: 'btn small primary', type: 'button', onclick: stop(async () => { await setStatus(o, 'ready'); done(); }) }, readyLabel(o)));
+    if (!o.paid) acts.push(payBtn());
+    acts.push(el('button', { class: 'btn small primary', type: 'button', id: 'act-otw', onclick: stop(async () => { await setStatus(o, 'ready'); done(); }) }, readyLabel(o)));
+    acts.push(cancel());
   } else if (o.status === 'ready') {
-    if (!o.paid) acts.push(el('button', { class: 'btn small pay', type: 'button', onclick: stop(() => payModal(o)) }, 'Mark paid'));
+    if (!o.paid) acts.push(payBtn());
     acts.push(el('button', { class: 'btn small done', type: 'button', id: 'act-delivered', onclick: stop(() => deliveredModal(o)) }, doneLabel(o)));
   } else if (o.status === 'done') {
-    acts.push(el('span', { class: 'paid-note' }, '✓ ' + doneLabel(o), o.deliveryProof ? ' · photo' : ''));
-    if (!o.paid) acts.push(el('button', { class: 'btn small pay', type: 'button', onclick: stop(() => payModal(o)) }, 'Mark paid'));
+    if (!o.paid) { acts.push(el('span', { class: 'paid-note warn', text: '✓ ' + doneLabel(o) + ' · not paid' })); acts.push(payBtn()); }
+    else acts.push(el('span', { class: 'paid-note', text: '✓ Completed' }));
   }
   return acts;
 }
+/* Accept asks first */
+function acceptSheet(o0, after) {
+  const o = M.orders.get(o0.id) || o0;
+  openModal(el('div', { class: 'sheet accept' }, el('h2', { text: `Accept order ${orderNo(o.no)}?` }),
+    el('div', { class: 'acc-card' },
+      el('div', { class: 'who' }, whoAvatar(o, 'sm'), el('span', { class: 'who-nm' }, o.customerName || 'Walk-in', o.phone ? el('small', { text: o.phone }) : null)),
+      o.address ? el('div', { class: 'addr', text: '📍 ' + o.address }) : null,
+      slotText(o) || o.slot ? el('div', { class: 'when', text: '🕒 ' + (slotText(o) || o.slot) }) : null,
+      el('ul', { class: 'lines' }, itemLines(o)),
+      el('div', { class: 'sum total' }, el('span', { text: 'Total' }), el('span', { text: money(o.total) })),
+      o.note ? el('div', { class: 'note', text: o.note }) : null),
+    el('div', { class: 'sub', text: 'The customer will see "Accepted" and can pay.' }),
+    el('div', { class: 'actions' }, el('button', { class: 'btn', type: 'button', onclick: closeModal }, 'Back'),
+      el('button', { class: 'btn primary', type: 'button', id: 'acc-yes', onclick: async () => { if (await setStatus(o, 'accepted')) { closeModal(); toast(`${orderNo(o.no)} accepted`); if (after) setTimeout(after, 0); } } }, 'Accept order'))));
+}
+const PHONE_DOMAIN = 'phone.orderdesk.app';
+function loginText(o) {
+  const l = o.clientLogin || '';
+  if (!l) return '';
+  if (l === 'guest') return '👤 Guest (this phone only)';
+  if (l.endsWith('@' + PHONE_DOMAIN)) return '📱 Phone account · ' + l.replace('@' + PHONE_DOMAIN, '');
+  return '✉ Email account · ' + l;
+}
+const pickupOn = () => S.settings.pickup !== false;
 function unreadFrom(clientId) { return clientId ? S.msgs.filter(m => m.client_id === clientId && !m.from_admin && !m.read_at).length : 0; }
 function ticket(o) {
   const sameDay = startOfDay(o.createdAt) === startOfDay(Date.now());
@@ -654,12 +744,13 @@ function ticket(o) {
       el('span', { class: 't-time', text: timeStr(o.createdAt) + (sameDay ? '' : ' · ' + dateShort(o.createdAt)) }),
       hasNight() ? el('span', { class: 'tag svc ' + orderSvc(o), text: orderSvc(o) === 'night' ? '🌙' : '☀', title: SVC[orderSvc(o)] }) : null,
       o.source === 'shop' ? el('span', { class: 'tag shop', text: 'Shop' }) : null,
-      el('span', { class: 'tag', text: o.type === 'delivery' ? 'Delivery' : 'Pickup' }),
+      pickupOn() || o.type === 'pickup' ? el('span', { class: 'tag', text: o.type === 'delivery' ? 'Delivery' : 'Pickup' }) : null,
       unread ? el('span', { class: 'tag msg', text: '💬 ' + unread }) : null,
       payPill(o)),
     el('div', { class: 't-body' },
       stepText(o) ? el('div', { class: 'stepnow', text: stepText(o) }) : isNew(o) && !isCancelled(o) ? el('div', { class: 'stepnow new', text: 'New · accept or cancel' }) : null,
       el('div', { class: 'who' }, whoAvatar(o, 'sm'), el('span', { class: 'who-nm' }, o.customerName || 'Walk-in', o.phone ? el('small', { text: o.phone }) : null)),
+      loginText(o) ? el('div', { class: 'login-tag', text: loginText(o) }) : null,
       o.address ? el('div', { class: 'addr', text: o.address }) : null,
       slotText(o) ? el('div', { class: 'when', text: '🕒 ' + slotText(o) }) : null,
       el('ul', { class: 'lines' }, itemLines(o)),
@@ -707,13 +798,14 @@ function orderSheet(o0) {
   openModal(el('div', { class: 'sheet od' },
     el('div', { class: 'od-head' }, el('h2', { text: `Order ${orderNo(o.no)}` }),
       hasNight() ? el('span', { class: 'tag svc ' + orderSvc(o), text: SVC[orderSvc(o)] }) : null, payPill(o)),
-    el('div', { class: 'sub', text: `${o.source === 'shop' ? 'Ordered in the shop' : 'Taken by you'} · ${dateShort(o.createdAt)} ${timeStr(o.createdAt)} · ${o.type === 'delivery' ? 'Delivery' : 'Pickup'}` }),
+    el('div', { class: 'sub', text: `${o.source === 'shop' ? 'Ordered in the shop' : 'Taken by you'} · ${dateShort(o.createdAt)} ${timeStr(o.createdAt)}${pickupOn() || o.type === 'pickup' ? ' · ' + (o.type === 'delivery' ? 'Delivery' : 'Pickup') : ''}` }),
     !isCancelled(o) ? el('div', { class: 'stepper', role: 'group', 'aria-label': 'Progress (the client sees this)' }, steps.map(([k, l], i) =>
       el('button', { type: 'button', class: i < cur ? 'past' : i === cur ? 'now' : '', 'aria-pressed': i === cur, onclick: async () => { if (k === 'done') return deliveredModal(o); await setStatus(o, k); again(); } },
         el('span', { class: 'dot', text: i < cur ? '✓' : i + 1 }), el('span', { text: l })))) : el('div', { class: 'err', text: 'Cancelled' }),
     el('div', { class: 'od-acts' }, orderActions(o, again)),
     el('section', { class: 'od-sect od-who' },
-      el('div', { class: 'who-head' }, whoAvatar(o, 'big'), el('div', { style: 'min-width:0' }, el('b', { text: o.customerName || 'Walk-in' }), o.phone ? el('div', { class: 'sub', text: o.phone }) : null)),
+      el('div', { class: 'who-head' }, whoAvatar(o, 'big'), el('div', { style: 'min-width:0' }, el('b', { text: o.customerName || 'Walk-in' }), o.phone ? el('div', { class: 'sub', text: o.phone }) : null,
+        el('div', { class: 'login-tag', text: loginText(o) || (o.source === 'shop' ? 'Shop customer' : 'Order taken by you') }))),
       el('div', { class: 'btns' },
         o.phone ? el('a', { class: 'btn small', href: 'tel:' + o.phone.replace(/[^\d+]/g, '') }, '📞 Call') : null,
         o.phone ? el('button', { class: 'btn small', type: 'button', onclick: () => copyText(o.phone) }, 'Copy number') : null,
@@ -727,7 +819,7 @@ function orderSheet(o0) {
     el('section', { class: 'od-sect' }, el('h3', { text: 'Timeline' }),
       el('ol', { class: 'timeline' }, events.map(([l, t]) => el('li', {}, el('span', { text: l }), el('span', { class: 'sub', text: dateShort(t) + ' ' + timeStr(t) }))))),
     el('div', { class: 'actions' },
-      !isCancelled(o) && !isNew(o) && !(o.status === 'accepted' && !o.paid) ? confirmBtn('Cancel order', 'Cancel it?', async () => { await setStatus(o, 'cancelled'); again(); }, 'danger left') : null,
+      !isCancelled(o) && !isNew(o) && o.status !== 'accepted' && !isComplete(o) ? confirmBtn('Cancel order', 'Cancel it?', async () => { await setStatus(o, 'cancelled'); again(); }, 'danger left') : null,
       el('button', { class: 'btn', type: 'button', onclick: closeModal }, 'Close'))));
 }
 /* Delivered / Picked up, with an optional photo the client can see */
@@ -829,6 +921,8 @@ function viewNew(root) {
 function refreshNew() { refreshCustomerBits(); refreshGrid(); refreshBasket(); renderNav(); }
 function refreshCustomerBits() {
   const d = S.draft;
+  if (!pickupOn()) d.type = 'delivery';
+  N.typeSeg.hidden = !pickupOn();
   N.typeSeg.replaceChildren(...[['delivery', 'Delivery'], ['pickup', 'Pickup']].map(([k, label]) =>
     el('button', { type: 'button', 'aria-pressed': d.type === k, onclick: () => { d.type = k; refreshCustomerBits(); refreshBasket(); } }, label)));
   N.addrField.hidden = d.type !== 'delivery';
@@ -1029,7 +1123,7 @@ function menuResults(root) {
   if (!items.length) root.append(el('div', { class: 'empty' }, el('b', { text: 'No dishes match' }), 'Try another word.'));
   for (const [c, arr] of by) {
     root.append(el('h2', { class: 'cat-title' }, c, el('span', { text: arr.length + (arr.length === 1 ? ' dish' : ' dishes') })));
-    root.append(el('div', { class: 'mlist' }, arr.map(m => el('div', { class: 'mrow' + (m.available === false ? ' off' : '') },
+    root.append(el('div', { class: 'mlist' }, arr.map(m => el('div', { class: 'mrow' + (m.available === false ? ' off' : ''), tabindex: '0', onclick: e => { if (!e.target.closest('button, label, input')) dishView(m); } },
       thumb(m, ''),
       el('div', {}, el('div', { class: 'nm', text: m.name + (m.service === 'night' ? ' 🌙' : ' ☀') }),
         dishRating(m.id) ? el('div', { class: 'pr', text: dishRating(m.id) }) : null,
@@ -1371,16 +1465,152 @@ function repeatLast(c) {
 const UNITS = ['kg', 'g', 'L', 'ml', 'pcs', 'pack', 'box', 'bag', 'dozen'];
 const monthKey = day => day.slice(0, 7);
 const monthLabel = key => { const [y, m] = key.split('-').map(Number); return new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' }); };
+/* ---------- DISH PAGE (same look as the shop; Edit opens the editor) ---------- */
+function soldLast30(id) {
+  const from = Date.now() - 30 * DAY;
+  let n = 0;
+  for (const o of S.orders) if (!isCancelled(o) && o.createdAt >= from) for (const it of o.items || []) if (it.menuId === id) n += num(it.qty);
+  return n;
+}
+function dishView(m0) {
+  const m = M.menu.get(m0.id) || m0;
+  const vs = (m.variants || []).map(v => num(v.price)), lo = Math.min(...vs), hi = Math.max(...vs);
+  const rs = reviewsOf(m.id).filter(r => !r.hidden), avg = rs.length ? rs.reduce((a, r) => a + r.stars, 0) / rs.length : 0;
+  const good = rs.length ? Math.round(100 * rs.filter(r => r.stars >= 4).length / rs.length) : 0;
+  const stock = new Map(stockList().map(r => [r.key, r]));
+  const pic = m.photo ? el('img', { class: 'dd-img', src: photoUrl(m.photo), alt: m.name }) : el('div', { class: 'dd-img ph', style: '--h:' + hue(m.name), text: initial(m.name) });
+  const sold = soldLast30(m.id);
+  openModal(el('div', { class: 'sheet dd', id: 'dish-view' },
+    el('div', { class: 'dd-top' }, el('button', { class: 'dd-round', type: 'button', 'aria-label': 'Close', onclick: closeModal }, '⌄'),
+      el('button', { class: 'btn small primary', type: 'button', id: 'dd-edit', onclick: () => menuModal(m) }, 'Edit')),
+    el('div', { class: 'dd-hero' }, pic),
+    el('div', { class: 'dd-scroll' },
+      el('div', { class: 'dd-price-card' },
+        el('div', {}, el('div', { class: 'dd-price' }, el('small', { text: S.settings.currency || '' }), vs.length ? String(lo) : '', lo !== hi ? el('span', { class: 'dd-from', text: ` – ${hi}` }) : null),
+          el('div', { class: 'dd-sold', text: `Sold ${sold} in the last 30 days` })),
+        el('div', { class: 'dd-badge ' + (m.service === 'night' ? 'night' : 'day') }, el('b', { text: m.service === 'night' ? '🌙 Night' : '☀ Day' }), el('small', { text: m.available === false ? 'Sold out today' : 'Available' }))),
+      el('div', { class: 'dd-card' }, el('h2', { class: 'dd-name', text: m.name }),
+        el('div', { class: 'dd-tags' }, el('span', { class: 'dd-tag', text: m.category || 'Other' }), ...(m.windows || []).map(w => el('span', { class: 'dd-tag blue', text: '🕒 ' + winLabel(w) })),
+          ...(m.variants || []).filter(v => v.label).map(v => el('span', { class: 'dd-tag', text: `${v.label} ${money(v.price)}` }))),
+        m.description ? el('p', { class: 'dd-desc', text: m.description }) : null),
+      el('div', { class: 'dd-card' }, el('h3', { text: 'Ingredients' }),
+        (m.ingredients || []).length ? el('div', { class: 'dd-grid' }, m.ingredients.map(g => { const st = stock.get(ingKey(g.item)); const left = st ? st.bought - st.used : null;
+          return el('div', { class: 'dd-cell' }, el('b', { text: g.item }), el('small', { text: `${qtyText(num(g.qty) || 1)} ${st ? st.unit : ''} per dish`.trim() }),
+            left != null ? el('small', { class: left <= 0 ? 'bad' : '', text: `${qtyText(left)} ${st.unit} in stock`.trim() }) : null); }))
+          : el('div', { class: 'sub', text: 'No ingredients yet. Tap Edit to add them.' })),
+      el('div', { class: 'dd-card' }, el('div', { class: 'dd-rev-h' }, el('h3', { text: `Reviews (${rs.length})` }), rs.length ? el('span', { class: 'dd-good', text: `${good}% positive · ★ ${avg.toFixed(1)}` }) : null),
+        reviewsBox(m.id))),
+    el('div', { class: 'dd-bar' }, el('button', { class: 'btn', type: 'button', onclick: closeModal }, 'Close'),
+      el('label', { class: 'switch' }, el('input', { type: 'checkbox', checked: m.available !== false, onchange: e => write(Store.patch('menu', m.id, { available: e.target.checked })) }), 'Available'),
+      el('button', { class: 'btn primary', type: 'button', onclick: () => menuModal(m) }, 'Edit dish'))));
+}
+
+/* ---------- INVENTORY: 🍕 Pizza and 🍛 Others, fuel gauges, days left, can-still-make, shopping list ---------- */
+const INV_GROUPS = [['pizza', '🍕', 'Pizza'], ['other', '🍛', 'Others']];
+const invCfg = key => ((S.settings.inventory || {})[key] || {});
+function guessGroup(key) {
+  const users = S.menu.filter(m => (m.ingredients || []).some(g => ingKey(g.item) === key));
+  if (users.length && users.every(m => /pizza/i.test(m.category || '') || /pizza/i.test(m.name || ''))) return 'pizza';
+  return 'other';
+}
+const groupOf = key => invCfg(key).group || guessGroup(key);
+function invStats() {
+  const weekAgo = Date.now() - 7 * DAY;
+  const used7 = new Map(), spent = new Map();
+  for (const o of S.orders) {
+    if (isCancelled(o) || o.status !== 'done' || (o.doneAt || o.createdAt) < weekAgo) continue;
+    for (const it of o.items || []) { const m = M.menu.get(it.menuId); if (!m) continue; for (const g of m.ingredients || []) { const k = ingKey(g.item); used7.set(k, (used7.get(k) || 0) + num(g.qty) * num(it.qty)); } }
+  }
+  for (const p of S.purchases) { if (!p.item) continue; const k = ingKey(p.item); spent.set(k, (spent.get(k) || 0) + num(p.cost)); }
+  return stockList().map(r => {
+    const left = r.bought - r.used, perDay = (used7.get(r.key) || 0) / 7, low = num(invCfg(r.key).low);
+    const unitCost = r.bought ? (spent.get(r.key) || 0) / r.bought : 0;
+    const lastBuy = S.purchases.filter(p => ingKey(p.item) === r.key).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0];
+    const ref = Math.max(left, low * 3, lastBuy ? num(lastBuy.qty) : 0, 1);
+    const state = left <= 0 ? 'out' : (low && left <= low) || (perDay && left / perDay < 2) ? 'low' : 'ok';
+    return Object.assign({}, r, { left, perDay, low, days: perDay ? left / perDay : null, unitCost, value: Math.max(0, left) * unitCost, fill: Math.max(0, Math.min(1, left / ref)), state, group: groupOf(r.key) });
+  });
+}
+function canMake(stats) {
+  const by = new Map(stats.map(s => [s.key, s]));
+  return S.menu.filter(m => (m.ingredients || []).length).map(m => {
+    let n = Infinity, limit = '';
+    for (const g of m.ingredients) { const st = by.get(ingKey(g.item)); const q = num(g.qty) || 1; const k = st ? Math.floor(Math.max(0, st.left) / q) : 0; if (k < n) { n = k; limit = g.item; } }
+    return { m, n: n === Infinity ? 0 : n, limit };
+  }).sort((a, b) => a.n - b.n);
+}
 function viewInventory(root) {
-  root.append(pageHead('Inventory', 'What you bought, when, and for how much.',
+  if (!S.invTab) S.invTab = 'stock';
+  root.append(pageHead('Inventory', 'Stock, what runs out next, and what you bought.',
     el('button', { class: 'btn primary', type: 'button', onclick: () => purchaseModal(null) }, '+ Add', el('span', { class: 'hide-m', text: ' purchase' }))));
+  root.append(el('div', { class: 'inv-tabs', role: 'group' }, [['stock', 'Stock'], ['buys', 'Purchases']].map(([k, l]) =>
+    el('button', { type: 'button', id: 'inv-' + k, 'aria-pressed': S.invTab === k, onclick: () => { S.invTab = k; render(true); } }, l))));
+  if (S.invTab === 'buys') return purchasesList(root);
+  const stats = invStats();
+  if (!stats.length) { root.append(el('div', { class: 'empty' }, el('b', { text: 'No stock yet' }), 'Add what you buy (pizza bases, chicken, flour…) with "+ Add purchase". Then add ingredients to your dishes, and every delivered order takes them out of stock.')); return; }
+  const lowOnes = stats.filter(s => s.state !== 'ok');
+  const value = stats.reduce((a, s) => a + s.value, 0);
+  root.append(el('div', { class: 'inv-sum' },
+    el('div', { class: 'inv-kpi' }, el('small', { text: 'Stock value' }), el('b', { text: money(Math.round(value)) })),
+    el('div', { class: 'inv-kpi' + (lowOnes.length ? ' warn' : '') }, el('small', { text: 'Low or out' }), el('b', { text: String(lowOnes.length) })),
+    el('button', { class: 'inv-shop', type: 'button', id: 'inv-shoplist', onclick: () => shoppingList(stats) }, '🛒', el('span', { text: 'Shopping list' }))));
+  for (const [g, emoji, title] of INV_GROUPS) {
+    const items = stats.filter(s => s.group === g);
+    const lowN = items.filter(s => s.state !== 'ok').length;
+    root.append(el('section', { class: 'inv-group ' + g, id: 'grp-' + g },
+      el('div', { class: 'ig-head' }, el('span', { class: 'ig-emoji', text: emoji }), el('div', { class: 'ig-title' }, el('b', { text: title }), el('small', { text: `${items.length} ingredient${items.length === 1 ? '' : 's'} · ${money(Math.round(items.reduce((a, s) => a + s.value, 0)))}` })),
+        lowN ? el('span', { class: 'ig-low', text: `${lowN} low` }) : el('span', { class: 'ig-ok', text: 'All good' })),
+      items.length ? el('div', { class: 'ig-list' }, items.map(s => el('div', { class: 'ing ' + s.state, role: 'button', tabindex: '0', 'data-key': s.key, onclick: () => ingredientSheet(s.key) },
+        el('div', { class: 'ing-top' }, el('b', { text: s.name }), el('span', { class: 'ing-left', text: `${qtyText(s.left)} ${s.unit}`.trim() })),
+        el('div', { class: 'gauge' }, el('i', { style: `width:${Math.round(s.fill * 100)}%` })),
+        el('div', { class: 'ing-meta' }, el('span', { text: s.state === 'out' ? 'Out of stock' : s.days != null ? `≈ ${s.days < 1 ? 'less than a day' : Math.floor(s.days) + ' day' + (Math.floor(s.days) === 1 ? '' : 's')} left` : 'Not used this week' }),
+          el('button', { class: 'ing-plus', type: 'button', 'aria-label': 'Restock ' + s.name, onclick: e => { e.stopPropagation(); purchaseModal(null, { item: s.name, unit: s.unit }); } }, '+')))))
+        : el('div', { class: 'sub', style: 'padding:6px 4px', text: g === 'pizza' ? 'No pizza ingredients yet. Open an ingredient and set its group to Pizza.' : 'Nothing here yet.' })));
+  }
+  const cm = canMake(stats);
+  if (cm.length) root.append(el('section', { class: 'card can-make' }, el('h2', { text: 'Can still make' }),
+    el('div', { class: 'sub', text: 'With what is in stock now. The ingredient in brackets runs out first.' }),
+    el('div', { class: 'cm-list' }, cm.map(x => el('div', { class: 'cm-row' + (x.n === 0 ? ' zero' : x.n <= 5 ? ' few' : '') },
+      el('span', { class: 'cm-n', text: String(x.n) }), el('span', { class: 'cm-nm' }, x.m.name, el('small', { text: ` (${x.limit})` })))))));
+}
+function shoppingList(stats) {
+  const need = stats.filter(s => s.state !== 'ok');
+  const lines = need.map(s => `• ${s.name} — ${qtyText(Math.max(0, s.left))} ${s.unit} left`.replace(/\s+left$/, ' left'));
+  const text = need.length ? `🛒 Shopping list (${dateShort(Date.now())})\n` + lines.join('\n') : '';
+  openModal(el('div', { class: 'sheet' }, el('h2', { text: '🛒 Shopping list' }),
+    need.length ? el('pre', { class: 'shoplist', id: 'shoplist', text }) : el('div', { class: 'sub', text: 'Nothing is low. Set "Alert when below" on an ingredient to get it listed here.' }),
+    el('div', { class: 'actions' }, el('button', { class: 'btn', type: 'button', onclick: closeModal }, 'Close'),
+      need.length ? el('button', { class: 'btn primary', type: 'button', onclick: () => copyText(text) }, 'Copy for WeChat') : null)));
+}
+function ingredientSheet(key) {
+  const s = invStats().find(x => x.key === key); if (!s) return;
+  const cfg = Object.assign({ group: s.group, low: s.low || '' }, invCfg(key));
+  const seg = el('div', { class: 'seg', role: 'group' });
+  const drawSeg = () => seg.replaceChildren(...INV_GROUPS.map(([g, e, t]) => el('button', { type: 'button', id: 'ig-' + g, 'aria-pressed': cfg.group === g, onclick: () => { cfg.group = g; drawSeg(); } }, `${e} ${t}`)));
+  drawSeg();
+  const buys = S.purchases.filter(p => ingKey(p.item) === key).sort((a, b) => (b.day || '').localeCompare(a.day || ''));
+  const usedBy = S.menu.filter(m => (m.ingredients || []).some(g => ingKey(g.item) === key));
+  openModal(el('div', { class: 'sheet' }, el('h2', { text: s.name }),
+    el('div', { class: 'ing-stats' },
+      el('div', {}, el('small', { text: 'In stock' }), el('b', { class: s.state, text: `${qtyText(s.left)} ${s.unit}`.trim() })),
+      el('div', {}, el('small', { text: 'Used / day' }), el('b', { text: s.perDay ? `${qtyText(Math.round(s.perDay * 100) / 100)} ${s.unit}`.trim() : '—' })),
+      el('div', {}, el('small', { text: 'Avg price' }), el('b', { text: s.unitCost ? `${money(Math.round(s.unitCost * 100) / 100)}/${s.unit || 'unit'}` : '—' }))),
+    el('div', { class: 'field' }, el('label', { text: 'Group' }), seg),
+    el('div', { class: 'field' }, el('label', { for: 'ig-low', text: `Alert when below (${s.unit || 'units'})` }),
+      el('input', { id: 'ig-low', type: 'number', inputmode: 'decimal', min: '0', step: 'any', value: cfg.low, placeholder: 'e.g. 5', oninput: e => { cfg.low = e.target.value; } })),
+    usedBy.length ? el('div', { class: 'sub', text: 'Used in: ' + usedBy.map(m => m.name).join(', ') }) : el('div', { class: 'sub', text: 'Not used in any dish yet.' }),
+    buys.length ? el('div', { class: 'ing-buys' }, el('b', { text: 'Bought' }), buys.slice(0, 6).map(p => el('div', { class: 'od-row' }, el('span', { text: `${dayLabel(p.day)} · ${qtyText(num(p.qty))} ${p.unit || ''}` }), el('span', { text: money(p.cost) })))) : null,
+    el('div', { class: 'actions' },
+      el('button', { class: 'btn left', type: 'button', onclick: () => purchaseModal(null, { item: s.name, unit: s.unit }) }, '+ Restock'),
+      el('button', { class: 'btn', type: 'button', onclick: closeModal }, 'Close'),
+      el('button', { class: 'btn primary', type: 'button', id: 'ig-save', onclick: async () => {
+        const inv = Object.assign({}, S.settings.inventory || {});
+        inv[key] = { group: cfg.group, low: cfg.low === '' ? 0 : Math.max(0, Number(cfg.low) || 0) };
+        if (await write(Store.put('settings', Object.assign({}, S.settings, { inventory: inv, invTouched: true })), 'Saved')) closeModal();
+      } }, 'Save'))));
+}
+function purchasesList(root) {
   const list = S.purchases.slice().sort((a, b) => (b.day || '').localeCompare(a.day || '') || (b.createdAt || 0) - (a.createdAt || 0));
-  const stock = stockList();
-  if (stock.length) root.append(el('div', { class: 'card stock' }, el('h2', { text: 'Stock' }),
-    el('div', { class: 'sub', text: 'Bought minus what delivered orders used (from each dish\'s ingredients).' }),
-    el('div', { class: 'stock-list' }, stock.map(r => { const left = r.bought - r.used; return el('div', { class: 'stock-row' + (left <= 0 && r.used ? ' out' : '') },
-      el('span', { class: 'nm', text: r.name }), el('small', { text: `bought ${qtyText(r.bought)} · used ${qtyText(r.used)}` }),
-      el('b', { text: `${qtyText(left)} ${r.unit}`.trim() })); }))));
   if (!list.length) { root.append(el('div', { class: 'empty' }, el('b', { text: 'No purchases yet' }), 'Add what you buy (meat, flour, gas…) with the cost and a photo of the receipt.')); return; }
   const thisMonth = monthKey(isoDay(Date.now()));
   const mSpent = list.filter(p => monthKey(p.day) === thisMonth).reduce((a, p) => a + num(p.cost), 0);
@@ -1396,8 +1626,8 @@ function viewInventory(root) {
       el('b', { class: 'p-cost', text: money(p.cost) })))));
   }
 }
-function purchaseModal(p0) {
-  const p = p0 ? clone(p0) : { day: isoDay(Date.now()), item: '', qty: '', unit: '', cost: '', note: '', photos: [] };
+function purchaseModal(p0, pre) {
+  const p = p0 ? clone(p0) : Object.assign({ day: isoDay(Date.now()), item: '', qty: '', unit: '', cost: '', note: '', photos: [] }, pre || {});
   const keep = (p.photos || []).slice(); const added = []; // {blob, url}
   const shots = el('div', { class: 'shots' });
   async function drawShots() {
@@ -1756,6 +1986,9 @@ function settingsModal() {
     el('div', { class: 'sect' }, el('h3', { text: 'Delivery addresses' }),
       el('div', { class: 'sub', text: 'Only these can be picked for a delivery. Fee 0 = free delivery.' }),
       abox, el('button', { class: 'link', type: 'button', style: 'align-self:flex-start', onclick: () => { addrs.push({ id: newId(), name: '', fee: '', was: '' }); drawAddrs(); const ins = abox.querySelectorAll('.addr-row input:not([type=number])'); if (ins.length) ins[ins.length - 1].focus(); } }, '+ Add address')),
+    el('div', { class: 'sect' }, el('h3', { text: 'Pickup' }),
+      el('label', { class: 'switch' }, el('input', { type: 'checkbox', id: 's-pickup', checked: s.pickup !== false, onchange: e => { s.pickup = e.target.checked; } }), 'Pickup available'),
+      el('div', { class: 'sub', text: 'Off: customers can only choose delivery, and Pickup disappears everywhere. Turn it on again any time.' })),
     el('div', { class: 'sect' }, el('h3', { text: 'Payment' }),
       el('div', { class: 'sub', text: 'Clients see these when they pay in the shop.' }),
       el('div', { class: 'pay-cfgs' },
@@ -1769,7 +2002,9 @@ function settingsModal() {
         const rec = { id: 'main', name: (s.name || '').trim() || 'My kitchen', currency: s.currency || '', deliveryFee: num(S.settings.deliveryFee),
           addresses: clean.map(({ id, name, fee }) => ({ id, name, fee })), addrTouched: true,
           wechatQr: qr.wechat.path, alipayQr: qr.alipay.path, wechatId: (s.wechatId || '').trim(), alipayId: (s.alipayId || '').trim(),
-          payCfgTouched: !!(S.settings.payCfgTouched || payChanged) };
+          payCfgTouched: !!(S.settings.payCfgTouched || payChanged),
+          pickup: s.pickup !== false, pkTouched: !!(S.settings.pkTouched || (s.pickup === false) !== (S.settings.pickup === false)),
+          inventory: S.settings.inventory || {}, invTouched: !!S.settings.invTouched };
         const extra = [];
         for (const k of ['wechat', 'alipay']) {
           const q = qr[k], old = S.settings[k + 'Qr'] || '';
