@@ -1,3 +1,4 @@
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
 @font-face{font-family:'Bricolage Grotesque';font-weight:600;font-display:swap;src:url(bricolage-grotesque-latin-600-normal.woff2) format('woff2')}
 @font-face{font-family:'Bricolage Grotesque';font-weight:700;font-display:swap;src:url(bricolage-grotesque-latin-700-normal.woff2) format('woff2')}
 @font-face{font-family:'Hanken Grotesk';font-weight:400;font-display:swap;src:url(hanken-grotesk-latin-400-normal.woff2) format('woff2')}

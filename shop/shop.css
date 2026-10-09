@@ -96,18 +96,18 @@ body.shop{padding-bottom:calc(84px + env(safe-area-inset-bottom,0px))}
   --ck-page:#DCE3DD;--ck-box:#EEF2EE;--ck-head:#2C3A33;--ck-step:#2B7A4F;--ck-sum:#1F2A24;--ck-sum-ink:#EEF3EF;--ck-sum-muted:#A9B7AF}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--price:#FF6A4D;--cart-bg:#1B211E;--ck-page:#0C100E;--ck-box:#18201C;--ck-head:#E1E9E4;--ck-step:#5FC48D;--ck-sum:#26322B;--ck-sum-ink:#EEF3EF;--ck-sum-muted:#A9B7AF}}
 :root[data-theme="dark"]{--price:#FF6A4D;--cart-bg:#1B211E;--ck-page:#0C100E;--ck-box:#18201C;--ck-head:#E1E9E4;--ck-step:#5FC48D;--ck-sum:#26322B;--ck-sum-ink:#EEF3EF;--ck-sum-muted:#A9B7AF}
-.cartbar{pointer-events:auto;background:var(--cart-bg);border-top:1px solid var(--line);box-shadow:0 -4px 18px rgba(0,0,0,.08);display:flex;align-items:center;gap:12px;padding:10px 14px calc(10px + env(safe-area-inset-bottom,0px));max-width:100%}
+.cartbar{pointer-events:auto;background:var(--cart-bg);border-top:1px solid var(--line);box-shadow:0 -3px 12px rgba(0,0,0,.06);display:flex;align-items:center;gap:10px;padding:7px 12px calc(7px + env(safe-area-inset-bottom,0px));max-width:100%}
 @media (min-width:760px){.cartbar{max-width:728px;margin:0 auto 12px;border:1px solid var(--line);border-radius:18px}}
-.cart-ic{position:relative;flex:none;width:52px;height:52px;border-radius:50%;border:0;background:var(--go-bg);color:#1A1A1A;display:grid;place-items:center;box-shadow:0 2px 6px rgba(240,172,27,.45)}
+.cart-ic{position:relative;flex:none;width:40px;height:40px;border-radius:50%;border:0;background:var(--go-bg);color:#1A1A1A;display:grid;place-items:center;box-shadow:0 2px 6px rgba(240,172,27,.45)}
 .cart-svg{display:grid;place-items:center}
-.cart-badge{position:absolute;top:-4px;right:-6px;min-width:22px;height:22px;padding:0 6px;border-radius:99px;background:#F23C2C;color:#fff;font-size:13px;font-weight:700;line-height:22px;text-align:center;border:2px solid var(--cart-bg)}
+.cart-badge{position:absolute;top:-4px;right:-6px;min-width:18px;height:18px;padding:0 5px;border-radius:99px;background:#F23C2C;color:#fff;font-size:11px;font-weight:700;line-height:15px;text-align:center;border:2px solid var(--cart-bg)}
 .cart-sum{flex:1;min-width:0;background:none;border:0;padding:0;text-align:left;display:flex;flex-direction:column;gap:1px;color:var(--ink)}
-.cart-total{color:var(--price);font-family:var(--font-display);font-size:27px;font-weight:700;line-height:1.05;letter-spacing:-.01em}
-.cart-total small{font-size:16px;margin-right:1px;font-weight:700}
-.cart-fee{color:var(--muted);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.cart-go{flex:none;background:var(--go-bg);color:var(--go-ink);border:0;border-radius:99px;padding:0 26px;height:52px;font-size:18px;font-weight:700;box-shadow:0 2px 8px rgba(240,172,27,.4)}
+.cart-total{color:var(--price);font-family:var(--font-display);font-size:19px;font-weight:600;line-height:1.1}
+.cart-total small{font-size:12px;margin-right:1px;font-weight:600}
+.cart-fee{color:var(--muted);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cart-go{flex:none;background:var(--go-bg);color:var(--go-ink);border:0;border-radius:99px;padding:0 20px;height:38px;font-size:15px;font-weight:600;box-shadow:0 1px 4px rgba(240,172,27,.35)}
 .cart-go:active,.cart-ic:active{transform:scale(.97)}
-body.shop{padding-bottom:calc(92px + env(safe-area-inset-bottom,0px))}
+body.shop{padding-bottom:calc(68px + env(safe-area-inset-bottom,0px))}
 
 /* checkout: tinted page and cards instead of all white, dark total card */
 body.shop[data-view="checkout"]{background:var(--ck-page)}
@@ -125,5 +125,5 @@ body.shop[data-view="checkout"] .top{background:color-mix(in srgb,var(--ck-page)
 .sumbox .sumrow.total span{color:var(--ck-sum-ink)!important}
 .sumbox .fineprint{color:var(--ck-sum-muted)}
 .sumbox .err{color:#FF8A7A}
-.sumbox .big-btn{background:var(--go-bg);color:var(--go-ink);border:0;border-radius:99px;font-weight:700;font-size:17px;padding:14px}
+.sumbox .big-btn{background:var(--go-bg);color:var(--go-ink);border:0;border-radius:99px;font-weight:600;font-size:15.5px;padding:11px}
 .sumbox .big-btn:disabled{opacity:.5}
