@@ -11,7 +11,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   phoneDomain: 'phone.orderdesk.app', // phone logins are stored as <digits>@this, no SMS involved
 };
-const SHOP_VERSION = '1.9.0';
+const SHOP_VERSION = '1.9.1';
 /* phones (WeChat especially) keep old copies of web pages; if a newer shop is online, reload it */
 (async function freshness() {
   try {
@@ -236,7 +236,12 @@ function whoAmI() {
   const e = u.email || '';
   return e.endsWith('@' + CFG.phoneDomain) ? { kind: 'Phone', id: e.replace('@' + CFG.phoneDomain, '') } : { kind: 'Email', id: e };
 }
-async function signOutShop() { await sb.auth.signOut({ scope: 'local' }); S.session = null; S.orders = []; S.msgs = []; render(); toast('Signed out'); }
+/* signing out forgets everything about that person on this phone, so the next customer starts clean */
+function forgetPerson() {
+  S.session = null; S.orders = []; S.msgs = []; S.profile = null; S.lastOrder = null; lastStatus.clear();
+  Object.assign(S.draft, { name: '', phone: '', address: '', note: '' }); store.set('draft', S.draft);
+}
+async function signOutShop() { await sb.auth.signOut({ scope: 'local' }); forgetPerson(); render(); toast('Signed out'); }
 function viewMe(root) {
   const me = whoAmI();
   root.append(el('h1', { class: 'page-h', text: 'Me' }));
@@ -636,9 +641,11 @@ async function refreshProfile() {
     if (data && data[0]) { S.profile = data[0]; if (isLinked()) { S.draft.name = data[0].name || S.draft.name; store.set('draft', S.draft); } }
   } catch (_) { /* fine */ }
 }
-const isLinked = () => !!(S.profile && S.profile.notes !== undefined && S.profile.notes !== 'Signed up in the shop');
+const isLinked = () => !!(S.session && S.profile && S.profile.notes !== undefined && S.profile.notes !== 'Signed up in the shop');
 async function onSession(session) {
+  const prevUser = S.session && S.session.user && S.session.user.id;
   S.session = session || null;
+  if (session && prevUser && prevUser !== session.user.id) { S.profile = null; Object.assign(S.draft, { name: '', phone: '' }); }
   if (!session) { S.orders = []; return; }
   // fill in name / phone / address from the profile the shop keeps for this account
   try {
@@ -948,7 +955,7 @@ async function boot() {
   if (!sb) { S.loadErr = 'Could not start. Check your internet and reload.'; render(); return; }
   await loadShop();
   try { const r = await sb.auth.getSession(); if (r && r.data && r.data.session) { await onSession(r.data.session); render(); } } catch (_) { /* signed out */ }
-  sb.auth.onAuthStateChange((ev, session) => { if (ev === 'SIGNED_OUT') { S.session = null; S.orders = []; S.msgs = []; setTimeout(render); } else if (session) S.session = session; });
+  sb.auth.onAuthStateChange((ev, session) => { if (ev === 'SIGNED_OUT') { forgetPerson(); setTimeout(render); } else if (session) S.session = session; });
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { loadShop(); loadOrders(); } });
   setInterval(() => { if (document.visibilityState === 'visible') { loadOrders(); loadMsgs(); } }, 20000);
 }
