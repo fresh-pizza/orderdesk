@@ -9,7 +9,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   bucket: 'photos',
 };
-const VERSION = '2.3.0';
+const VERSION = '2.3.1';
 const COLLS = ['menu', 'customers', 'orders', 'settings', 'purchases'];
 const DEFAULT_SETTINGS = { id: 'main', name: 'My kitchen', currency: '¥', deliveryFee: 0, addresses: [], wechatQr: '', alipayQr: '', wechatId: '', alipayId: '' };
 
@@ -452,9 +452,34 @@ function renderNav() {
       k === 'messages' && unreadAll() ? el('span', { class: 'badge', text: unreadAll() }) : null);
   }));
   $('#side-sync').replaceChildren(syncChip());
+  renderMobileNav(open);
   const un = unreadAll();
   document.title = (open + un ? `(${open + un}) ` : '') + 'Order Desk';
 }
+/* phones: three main buttons + More (opens upward with the rest) */
+const MAIN_M = ['orders', 'new', 'messages'];
+ICONS.more = '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>';
+ICONS.settings = '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>';
+const SHORT = { orders: 'Orders', new: 'New', messages: 'Messages', more: 'More' };
+let moreOpen = false;
+function navIcon(k) { const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('aria-hidden', 'true'); svg.innerHTML = ICONS[k]; return svg; }
+function renderMobileNav(open) {
+  let bar = $('#mnav');
+  if (!bar) { bar = el('nav', { id: 'mnav', 'aria-label': 'Sections' }); document.body.append(bar); }
+  const badgeOf = k => (k === 'orders' ? open : k === 'messages' ? unreadAll() : 0);
+  const rest = NAV.filter(([k]) => !MAIN_M.includes(k));
+  const inRest = rest.some(([k]) => k === S.view);
+  const btn = (k, label, onclick, current) => el('button', { type: 'button', class: 'mn-btn', id: 'mn-' + k, 'aria-current': current ? 'page' : false, 'aria-label': label, onclick },
+    navIcon(k), el('span', { class: 'mn-lbl', text: SHORT[k] || label }), badgeOf(k) ? el('span', { class: 'badge', text: badgeOf(k) }) : null);
+  const menu = moreOpen ? el('div', { class: 'more-menu', id: 'more-menu', role: 'menu' },
+    rest.map(([k, label]) => el('button', { type: 'button', role: 'menuitem', class: 'mm-item', 'aria-current': S.view === k ? 'page' : false, onclick: () => { moreOpen = false; go(k); } }, navIcon(k), el('span', { text: label }))),
+    el('button', { type: 'button', role: 'menuitem', class: 'mm-item', onclick: () => { moreOpen = false; renderNav(); settingsModal(); } }, navIcon('settings'), el('span', { text: 'Settings' }))) : null;
+  bar.replaceChildren(...[
+    ...MAIN_M.map(k => btn(k, NAV.find(n => n[0] === k)[1], () => { moreOpen = false; go(k); }, S.view === k)),
+    btn('more', 'More', e => { e.stopPropagation(); moreOpen = !moreOpen; renderNav(); }, inRest || moreOpen), menu].filter(Boolean));
+  bar.classList.toggle('open', moreOpen);
+}
+document.addEventListener('click', e => { if (moreOpen && !e.target.closest('#mnav')) { moreOpen = false; renderNav(); } });
 function go(v) { S.view = v; S.ordLimit = 60; render(true); window.scrollTo(0, 0); }
 $('#gear-desk').addEventListener('click', () => settingsModal());
 
