@@ -9,7 +9,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   bucket: 'photos',
 };
-const VERSION = '2.5.0';
+const VERSION = '2.7.0';
 const COLLS = ['menu', 'customers', 'orders', 'settings', 'purchases'];
 const DEFAULT_SETTINGS = { id: 'main', name: 'My kitchen', currency: '¥', deliveryFee: 0, addresses: [], wechatQr: '', alipayQr: '', wechatId: '', alipayId: '', pickup: true, inventory: {} };
 
@@ -190,7 +190,8 @@ const money = n => {
 };
 const newDraft = () => ({ customerId: null, name: '', phone: '', address: '', type: 'delivery', note: '', lines: [] });
 const addrList = () => (Array.isArray(S.settings.addresses) ? S.settings.addresses : []);
-const addrFee = name => { const a = addrList().find(x => x.name === name); return a ? num(a.fee) : null; };
+const addrFee = (name, pizza) => { const a = addrList().find(x => x.name === name); if (!a) return null; return pizza && a.feePizza !== '' && a.feePizza != null ? num(a.feePizza) : num(a.fee); };
+const draftPizza = () => S.draft.lines.some(l => (M.menu.get(l.menuId) || {}).kitchen === 'pizza');
 const feeText = f => (f ? money(f) : 'Free');
 S.draft = newDraft();
 
@@ -247,10 +248,12 @@ const MAP = {
     to: r => Object.assign({ id: r.id, name: r.name || '', category: r.category || 'Other', description: r.description || '', variants: r.variants || [], photo: r.photo || '', available: r.available !== false, example: !!r.example, deleted: !!r.deleted },
       r.winTouched ? { windows: r.windows || [] } : {},
       r.svcTouched ? { service: r.service === 'night' ? 'night' : 'day' } : {},
-      r.ingTouched ? { ingredients: r.ingredients || [] } : {}),
+      r.ingTouched ? { ingredients: r.ingredients || [] } : {},
+      r.kitTouched ? { kitchen: r.kitchen === 'pizza' ? 'pizza' : 'other' } : {}),
     from: x => ({ id: x.id, name: x.name, category: x.category, description: x.description, variants: x.variants || [], photo: x.photo || '', available: x.available !== false, example: !!x.example, deleted: !!x.deleted,
       windows: Array.isArray(x.windows) ? x.windows : [], winTouched: x.windows !== undefined, service: x.service === 'night' ? 'night' : 'day', svcTouched: x.service !== undefined,
-      ingredients: Array.isArray(x.ingredients) ? x.ingredients : [], ingTouched: x.ingredients !== undefined }),
+      ingredients: Array.isArray(x.ingredients) ? x.ingredients : [], ingTouched: x.ingredients !== undefined,
+      kitchen: x.kitchen === 'pizza' ? 'pizza' : 'other', kitTouched: x.kitchen !== undefined }),
   },
   customers: {
     // photo is only sent when there is one, so this works even before the photo column exists
@@ -270,8 +273,10 @@ const MAP = {
       clientLogin: x.client_login || '' }),
   },
   purchases: {
-    to: r => ({ id: r.id, day: r.day || isoDay(Date.now()), item: r.item || '', qty: num(r.qty), unit: r.unit || '', cost: num(r.cost), note: r.note || '', photos: r.photos || [], created_at: toIso(r.createdAt), deleted: !!r.deleted }),
-    from: x => ({ id: x.id, day: x.day, item: x.item, qty: num(x.qty), unit: x.unit || '', cost: num(x.cost), note: x.note || '', photos: Array.isArray(x.photos) ? x.photos : [], createdAt: toMs(x.created_at), deleted: !!x.deleted }),
+    to: r => Object.assign({ id: r.id, day: r.day || isoDay(Date.now()), item: r.item || '', qty: num(r.qty), unit: r.unit || '', cost: num(r.cost), note: r.note || '', photos: r.photos || [], created_at: toIso(r.createdAt), deleted: !!r.deleted },
+      r.kindTouched ? { kind: ['pizza', 'expense'].includes(r.kind) ? r.kind : 'other' } : {}),
+    from: x => ({ id: x.id, day: x.day, item: x.item, qty: num(x.qty), unit: x.unit || '', cost: num(x.cost), note: x.note || '', photos: Array.isArray(x.photos) ? x.photos : [], createdAt: toMs(x.created_at), deleted: !!x.deleted,
+      kind: ['pizza', 'expense'].includes(x.kind) ? x.kind : 'other', kindTouched: x.kind !== undefined }),
   },
   settings: {
     to: r => Object.assign({ id: 'business', name: r.name || 'My kitchen', currency: r.currency ?? '¥', delivery_fee: num(r.deliveryFee), deleted: false },
@@ -750,7 +755,6 @@ function ticket(o) {
     el('div', { class: 't-body' },
       stepText(o) ? el('div', { class: 'stepnow', text: stepText(o) }) : isNew(o) && !isCancelled(o) ? el('div', { class: 'stepnow new', text: 'New · accept or cancel' }) : null,
       el('div', { class: 'who' }, whoAvatar(o, 'sm'), el('span', { class: 'who-nm' }, o.customerName || 'Walk-in', o.phone ? el('small', { text: o.phone }) : null)),
-      loginText(o) ? el('div', { class: 'login-tag', text: loginText(o) }) : null,
       o.address ? el('div', { class: 'addr', text: o.address }) : null,
       slotText(o) ? el('div', { class: 'when', text: '🕒 ' + slotText(o) }) : null,
       el('ul', { class: 'lines' }, itemLines(o)),
@@ -944,7 +948,7 @@ function refreshCustomerBits() {
 function addrSelect(id, value, onchange, withLegacy) {
   const list = addrList();
   const opts = [el('option', { value: '', text: list.length ? 'Choose address…' : 'No addresses yet' }),
-    ...list.map(a => el('option', { value: a.name, text: `${a.name} — ${feeText(num(a.fee))}` }))];
+    ...list.map(a => el('option', { value: a.name, text: `${a.name} — ${feeText(num(a.fee))}${a.feePizza !== '' && a.feePizza != null ? ' · 🍕 ' + feeText(num(a.feePizza)) : ''}` }))];
   if (withLegacy && value && !list.some(a => a.name === value)) opts.push(el('option', { value, text: value + ' (not in your list)' }));
   const sel = el('select', { id, onchange: e => onchange(e.target.value) }, opts);
   sel.value = value || '';
@@ -994,7 +998,7 @@ function addLine(m, v) {
 }
 function totals() {
   const d = S.draft, sub = d.lines.reduce((a, l) => a + l.price * l.qty, 0);
-  const fee = d.type === 'delivery' && d.lines.length ? (addrFee(d.address) || 0) : 0;
+  const fee = d.type === 'delivery' && d.lines.length ? (addrFee(d.address, draftPizza()) || 0) : 0;
   return { sub, fee, total: sub + fee };
 }
 function refreshBasket() {
@@ -1008,7 +1012,7 @@ function refreshBasket() {
       el('button', { type: 'button', 'aria-label': 'One more', onclick: () => { l.qty++; refreshBasket(); refreshGrid(); } }, '+')),
     el('button', { class: 'link', type: 'button', style: 'justify-self:end', onclick: () => { d.lines.splice(i, 1); refreshBasket(); refreshGrid(); } }, 'Remove')));
   const feeInput = d.type === 'delivery' ? el('div', { class: 'sum', id: 'b-fee' }, el('span', { text: 'Delivery' + (d.address ? ' · ' + d.address : '') }),
-    el('span', { text: d.address ? feeText(addrFee(d.address) || 0) : 'choose address' })) : null;
+    el('span', { text: d.address ? feeText(addrFee(d.address, draftPizza()) || 0) : 'choose address' })) : null;
   N.basket.replaceChildren(
     el('h2', { text: 'Order' }),
     ...(d.lines.length ? lines : [el('div', { class: 'basket-empty' })]),
@@ -1069,7 +1073,7 @@ async function saveOrder() {
   const t = totals(), no = nextNo();
   const order = {
     id: newId(), no, customerId: cid || null, customerName: name || 'Walk-in', phone, address: addr, type: d.type,
-    items: d.lines.map(l => ({ menuId: l.menuId, name: l.name, variant: l.variant, price: l.price, qty: l.qty })),
+    items: d.lines.map(l => { const m = M.menu.get(l.menuId) || {}; return { menuId: l.menuId, name: l.name, variant: l.variant, price: l.price, qty: l.qty, kitchen: m.kitchen === 'pizza' ? 'pizza' : 'other', ing: clone(m.ingredients || []) }; }),
     subtotal: t.sub, fee: t.fee, total: t.total, note: d.note.trim(), status: 'new', createdAt: now,
   };
   if (d.slot || (d.slotDate && d.slotDate !== isoDay(now))) Object.assign(order, { slotDate: d.slotDate, slot: d.slot || '', slotTouched: true });
@@ -1125,7 +1129,7 @@ function menuResults(root) {
     root.append(el('h2', { class: 'cat-title' }, c, el('span', { text: arr.length + (arr.length === 1 ? ' dish' : ' dishes') })));
     root.append(el('div', { class: 'mlist' }, arr.map(m => el('div', { class: 'mrow' + (m.available === false ? ' off' : ''), tabindex: '0', onclick: e => { if (!e.target.closest('button, label, input')) dishView(m); } },
       thumb(m, ''),
-      el('div', {}, el('div', { class: 'nm', text: m.name + (m.service === 'night' ? ' 🌙' : ' ☀') }),
+      el('div', {}, el('div', { class: 'nm', text: m.name + (m.service === 'night' ? ' 🌙' : ' ☀') + (m.kitchen === 'pizza' ? ' 🍕' : '') }),
         dishRating(m.id) ? el('div', { class: 'pr', text: dishRating(m.id) }) : null,
         (m.ingredients || []).length ? el('div', { class: 'pr', text: '🧂 ' + m.ingredients.map(g => g.item).join(', ') }) : null,
         el('div', { class: 'pr', text: (m.variants || []).map(v => (v.label ? v.label + ' ' : '') + money(v.price)).join(' · ') }),
@@ -1156,18 +1160,25 @@ function menuModal(item) {
   m.windows = Array.isArray(m.windows) ? clone(m.windows) : [];
   m.service = m.service === 'night' ? 'night' : 'day';
   m.ingredients = Array.isArray(m.ingredients) ? clone(m.ingredients) : [];
-  const inv = stockList();
+  m.kitchen = m.kitchen === 'pizza' || (!item && /pizza/i.test(m.category || '')) ? 'pizza' : 'other';
+  const allStock = stockList();
+  const inv = () => allStock.filter(x => x.kitchen === m.kitchen);
+  const invDl = el('datalist', { id: 'inv-items' });
+  const drawDl = () => invDl.replaceChildren(...inv().map(x => el('option', { value: x.name })));
   const ibox = el('div', { class: 'ing-list' });
   const drawIng = () => ibox.replaceChildren(...m.ingredients.map((g, i) => {
-    const unit = (inv.find(x => x.key === ingKey(g.item)) || {}).unit || '';
+    const unit = (allStock.find(x => x.key === stockKey(m.kitchen, g.item)) || {}).unit || '';
     return el('div', { class: 'ing-row' },
       el('input', { value: g.item, list: 'inv-items', placeholder: 'Ingredient', 'aria-label': 'Ingredient', oninput: e => { g.item = e.target.value; } }),
       el('input', { type: 'number', inputmode: 'decimal', min: '0', step: 'any', value: g.qty, 'aria-label': 'Amount per dish', oninput: e => { g.qty = e.target.value; } }),
       el('span', { class: 'ing-unit', text: unit || '×' }),
       el('button', { class: 'x', type: 'button', 'aria-label': 'Remove ingredient', onclick: () => { m.ingredients.splice(i, 1); drawIng(); } }, '✕'));
   }), ...(m.ingredients.length ? [] : [el('div', { class: 'sub', text: 'No ingredients yet.' })]));
-  drawIng();
-  const invDl = el('datalist', { id: 'inv-items' }, inv.map(x => el('option', { value: x.name })));
+  drawIng(); drawDl();
+  const kitSeg = el('div', { class: 'seg', role: 'group', 'aria-label': 'Kitchen' });
+  const drawKit = () => kitSeg.replaceChildren(...[['pizza', KITCH.pizza], ['other', KITCH.other]].map(([k, l]) =>
+    el('button', { type: 'button', id: 'f-kit-' + k, 'aria-pressed': m.kitchen === k, onclick: () => { m.kitchen = k; drawKit(); drawDl(); drawIng(); } }, l)));
+  drawKit();
   const svcSeg = el('div', { class: 'seg', role: 'group', 'aria-label': 'Day or night' });
   const drawSvc = () => svcSeg.replaceChildren(...[['day', SVC.day], ['night', SVC.night]].map(([k, l]) =>
     el('button', { type: 'button', id: 'f-svc-' + k, 'aria-pressed': m.service === k, onclick: () => { m.service = k; drawSvc(); } }, l)));
@@ -1224,7 +1235,8 @@ function menuModal(item) {
       windows, winTouched: !!(windows.length || (item && item.winTouched)),
       ingredients: m.ingredients.map(g => ({ item: (g.item || '').trim(), qty: g.qty === '' || g.qty == null ? 1 : Math.max(0, Number(g.qty) || 0) })).filter(g => g.item),
       ingTouched: !!(m.ingredients.length || (item && item.ingTouched)),
-      service: m.service, svcTouched: !!(m.service === 'night' || (item && item.svcTouched)) };
+      service: m.service, svcTouched: !!(m.service === 'night' || (item && item.svcTouched)),
+      kitchen: m.kitchen, kitTouched: !!(m.kitchen === 'pizza' || (item && item.kitTouched)) };
     if (await write(Store.put('menu', rec, extra), 'Saved')) closeModal();
   }
   drawVariants(); drawPhoto(); drawWins();
@@ -1239,7 +1251,8 @@ function menuModal(item) {
       el('button', { class: 'link', type: 'button', style: 'margin-top:8px', onclick: () => { m.windows.push({ from: '12:00', to: '14:00' }); drawWins(); } }, '+ Add time window')),
     el('div', {}, el('div', { class: 'sub', style: 'margin-bottom:6px', text: 'Ingredients (from your inventory). Customers see them, and each delivered dish takes them out of stock. Amount = per one dish.' }),
       ibox, invDl, el('button', { class: 'link', type: 'button', style: 'margin-top:8px', id: 'f-ing-add', onclick: () => { m.ingredients.push({ item: '', qty: 1 }); drawIng(); const ins = ibox.querySelectorAll('.ing-row input:not([type=number])'); if (ins.length) ins[ins.length - 1].focus(); } }, '+ Add ingredient'),
-      inv.length ? null : el('div', { class: 'sub', text: 'Tip: add purchases in Inventory and their names show up here.' })),
+      el('div', { class: 'sub', text: 'Suggestions come from this dish\'s kitchen stock in Inventory.' })),
+    el('div', { class: 'field' }, el('label', { text: 'Kitchen (which stock it uses, which delivery fee)' }), kitSeg),
     el('div', { class: 'field' }, el('label', { text: 'Sold during' }), svcSeg,
       el('div', { class: 'sub', text: 'Day and night dishes are ordered separately, and orders are split into Day / Night.' })),
     el('label', { class: 'switch' }, el('input', { type: 'checkbox', checked: m.available !== false, onchange: e => { m.available = e.target.checked; } }), 'Available today'),
@@ -1253,15 +1266,20 @@ function menuModal(item) {
 
 /* ---------- STOCK: bought (Inventory) minus used (delivered orders x dish ingredients) ---------- */
 const ingKey = n => String(n || '').trim().toLowerCase();
+const KITCH = { pizza: '🍕 Pizza', other: '🍛 Others' };
+const stockKey = (kitchen, name) => (kitchen === 'pizza' ? 'pizza' : 'other') + ':' + ingKey(name);
+/* stock is kept per kitchen: Chicken (Pizza) and Chicken (Others) are separate. Expenses (gas…) are not stock. */
 function stockList() {
   const by = new Map();
-  const get = name => { const k = ingKey(name); if (!by.has(k)) by.set(k, { key: k, name: String(name).trim(), unit: '', bought: 0, used: 0, last: 0 }); return by.get(k); };
-  for (const p of S.purchases) { if (!p.item) continue; const r = get(p.item); r.bought += num(p.qty); const t = p.createdAt || 0; if (t >= r.last) { r.last = t; r.unit = p.unit || r.unit; r.name = p.item.trim(); } }
+  const get = (kitchen, name) => { const k = stockKey(kitchen, name); if (!by.has(k)) by.set(k, { key: k, kitchen: kitchen === 'pizza' ? 'pizza' : 'other', name: String(name).trim(), unit: '', bought: 0, used: 0, last: 0 }); return by.get(k); };
+  for (const p of S.purchases) { if (!p.item || p.kind === 'expense') continue; const r = get(p.kind, p.item); r.bought += num(p.qty); const t = p.createdAt || 0; if (t >= r.last) { r.last = t; r.unit = p.unit || r.unit; r.name = p.item.trim(); } }
   for (const o of S.orders) {
     if (isCancelled(o) || o.status !== 'done') continue;
     for (const it of o.items || []) {
-      const m = M.menu.get(it.menuId); if (!m || m.deleted) continue;
-      for (const g of m.ingredients || []) if (g.item) get(g.item).used += num(g.qty) * num(it.qty);
+      const m = M.menu.get(it.menuId);
+      const ing = Array.isArray(it.ing) ? it.ing : (m && !m.deleted ? m.ingredients || [] : []); // the recipe locked into the order, else today's recipe
+      const kit = it.kitchen || (m && m.kitchen) || 'other';
+      for (const g of ing) if (g.item) get(kit, g.item).used += num(g.qty) * num(it.qty);
     }
   }
   return [...by.values()].sort((a, b) => a.name.localeCompare(b.name));
@@ -1284,20 +1302,34 @@ function dishRating(id) {
   return `★ ${(rs.reduce((a, r) => a + r.stars, 0) / rs.length).toFixed(1)} (${rs.length})`;
 }
 const starStr = n => '★★★★★'.slice(0, n) + '☆☆☆☆☆'.slice(0, 5 - n);
+/* full-size photo on tap */
+function openPhoto(src, alt) {
+  const ov = el('div', { class: 'lightbox', id: 'lightbox', role: 'dialog', 'aria-label': alt || 'Photo', onclick: () => ov.remove() },
+    el('img', { src, alt: alt || '' }), el('button', { class: 'lb-x', type: 'button', 'aria-label': 'Close' }, '✕'));
+  document.body.append(ov);
+}
+/* first few, then "See all" */
+function showSome(items, n, label) {
+  const box = el('div', { class: 'rev-list' });
+  const draw = all => box.replaceChildren(...(all ? items : items.slice(0, n)),
+    !all && items.length > n ? el('button', { class: 'see-all', type: 'button', id: 'see-all', onclick: () => draw(true) }, `See all ${items.length} ${label} ›`) : '');
+  draw(false);
+  return box;
+}
 function reviewsBox(dishId) {
   const box = el('div', { class: 'rev-box' });
   const draw = () => {
     const rs = reviewsOf(dishId);
     box.replaceChildren(el('div', { class: 'sub', style: 'margin-bottom:6px', text: rs.length ? `Reviews · ${dishRating(dishId) || 'all hidden'}` : 'No reviews yet.' }),
-      ...rs.map(r => el('div', { class: 'rev' + (r.hidden ? ' hidden' : '') },
+      showSome(rs.map(r => el('div', { class: 'rev' + (r.hidden ? ' hidden' : '') },
         el('div', { class: 'rev-h' }, el('span', { class: 'stars', text: starStr(r.stars) }), el('b', { text: r.customer_name || 'Customer' }), el('small', { text: dateShort(Date.parse(r.created_at)) }),
           el('button', { class: 'link', type: 'button', onclick: async () => {
             const hidden = !r.hidden;
             try { const { error } = await sb.from('reviews').update({ hidden }).eq('id', r.id); if (error) throw error; r.hidden = hidden; draw(); toast(hidden ? 'Review hidden' : 'Review shown'); }
             catch (e) { toast('Could not change it: ' + ((e && e.message) || 'no internet?'), true); }
           } }, r.hidden ? 'Show' : 'Hide')),
-        r.body ? el('div', { text: r.body }) : null,
-        r.photo ? el('img', { class: 'rev-img', src: photoUrl(r.photo), alt: 'Review photo', loading: 'lazy' }) : null)));
+        el('div', { class: 'rev-body' }, el('div', { class: 'rev-t', text: r.body || '' }),
+          r.photo ? el('button', { class: 'rev-thumb', type: 'button', 'aria-label': 'Open photo', onclick: () => openPhoto(photoUrl(r.photo), 'Review photo') }, el('img', { src: photoUrl(r.photo), alt: '', loading: 'lazy' })) : null))), 3, 'reviews'));
   };
   draw();
   return box;
@@ -1483,18 +1515,17 @@ function dishView(m0) {
   openModal(el('div', { class: 'sheet dd', id: 'dish-view' },
     el('div', { class: 'dd-top' }, el('button', { class: 'dd-round', type: 'button', 'aria-label': 'Close', onclick: closeModal }, '⌄'),
       el('button', { class: 'btn small primary', type: 'button', id: 'dd-edit', onclick: () => menuModal(m) }, 'Edit')),
-    el('div', { class: 'dd-hero' }, pic),
-    el('div', { class: 'dd-scroll' },
+    el('div', { class: 'dd-scroll' }, el('div', { class: 'dd-hero' }, pic),
       el('div', { class: 'dd-price-card' },
         el('div', {}, el('div', { class: 'dd-price' }, el('small', { text: S.settings.currency || '' }), vs.length ? String(lo) : '', lo !== hi ? el('span', { class: 'dd-from', text: ` – ${hi}` }) : null),
           el('div', { class: 'dd-sold', text: `Sold ${sold} in the last 30 days` })),
         el('div', { class: 'dd-badge ' + (m.service === 'night' ? 'night' : 'day') }, el('b', { text: m.service === 'night' ? '🌙 Night' : '☀ Day' }), el('small', { text: m.available === false ? 'Sold out today' : 'Available' }))),
       el('div', { class: 'dd-card' }, el('h2', { class: 'dd-name', text: m.name }),
-        el('div', { class: 'dd-tags' }, el('span', { class: 'dd-tag', text: m.category || 'Other' }), ...(m.windows || []).map(w => el('span', { class: 'dd-tag blue', text: '🕒 ' + winLabel(w) })),
+        el('div', { class: 'dd-tags' }, el('span', { class: 'dd-tag', text: KITCH[m.kitchen === 'pizza' ? 'pizza' : 'other'] + ' kitchen' }), el('span', { class: 'dd-tag', text: m.category || 'Other' }), ...(m.windows || []).map(w => el('span', { class: 'dd-tag blue', text: '🕒 ' + winLabel(w) })),
           ...(m.variants || []).filter(v => v.label).map(v => el('span', { class: 'dd-tag', text: `${v.label} ${money(v.price)}` }))),
         m.description ? el('p', { class: 'dd-desc', text: m.description }) : null),
       el('div', { class: 'dd-card' }, el('h3', { text: 'Ingredients' }),
-        (m.ingredients || []).length ? el('div', { class: 'dd-grid' }, m.ingredients.map(g => { const st = stock.get(ingKey(g.item)); const left = st ? st.bought - st.used : null;
+        (m.ingredients || []).length ? el('div', { class: 'dd-grid' }, m.ingredients.map(g => { const st = stock.get(stockKey(m.kitchen, g.item)); const left = st ? st.bought - st.used : null;
           return el('div', { class: 'dd-cell' }, el('b', { text: g.item }), el('small', { text: `${qtyText(num(g.qty) || 1)} ${st ? st.unit : ''} per dish`.trim() }),
             left != null ? el('small', { class: left <= 0 ? 'bad' : '', text: `${qtyText(left)} ${st.unit} in stock`.trim() }) : null); }))
           : el('div', { class: 'sub', text: 'No ingredients yet. Tap Edit to add them.' })),
@@ -1513,19 +1544,20 @@ function guessGroup(key) {
   if (users.length && users.every(m => /pizza/i.test(m.category || '') || /pizza/i.test(m.name || ''))) return 'pizza';
   return 'other';
 }
-const groupOf = key => invCfg(key).group || guessGroup(key);
+const groupOf = key => (key.startsWith('pizza:') ? 'pizza' : 'other');
 function invStats() {
   const weekAgo = Date.now() - 7 * DAY;
   const used7 = new Map(), spent = new Map();
   for (const o of S.orders) {
     if (isCancelled(o) || o.status !== 'done' || (o.doneAt || o.createdAt) < weekAgo) continue;
-    for (const it of o.items || []) { const m = M.menu.get(it.menuId); if (!m) continue; for (const g of m.ingredients || []) { const k = ingKey(g.item); used7.set(k, (used7.get(k) || 0) + num(g.qty) * num(it.qty)); } }
+    for (const it of o.items || []) { const m = M.menu.get(it.menuId); const ing = Array.isArray(it.ing) ? it.ing : (m ? m.ingredients || [] : []); const kit = it.kitchen || (m && m.kitchen) || 'other';
+      for (const g of ing) { const k = stockKey(kit, g.item); used7.set(k, (used7.get(k) || 0) + num(g.qty) * num(it.qty)); } }
   }
-  for (const p of S.purchases) { if (!p.item) continue; const k = ingKey(p.item); spent.set(k, (spent.get(k) || 0) + num(p.cost)); }
+  for (const p of S.purchases) { if (!p.item || p.kind === 'expense') continue; const k = stockKey(p.kind, p.item); spent.set(k, (spent.get(k) || 0) + num(p.cost)); }
   return stockList().map(r => {
     const left = r.bought - r.used, perDay = (used7.get(r.key) || 0) / 7, low = num(invCfg(r.key).low);
     const unitCost = r.bought ? (spent.get(r.key) || 0) / r.bought : 0;
-    const lastBuy = S.purchases.filter(p => ingKey(p.item) === r.key).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0];
+    const lastBuy = S.purchases.filter(p => p.kind !== 'expense' && stockKey(p.kind, p.item) === r.key).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0];
     const ref = Math.max(left, low * 3, lastBuy ? num(lastBuy.qty) : 0, 1);
     const state = left <= 0 ? 'out' : (low && left <= low) || (perDay && left / perDay < 2) ? 'low' : 'ok';
     return Object.assign({}, r, { left, perDay, low, days: perDay ? left / perDay : null, unitCost, value: Math.max(0, left) * unitCost, fill: Math.max(0, Math.min(1, left / ref)), state, group: groupOf(r.key) });
@@ -1535,7 +1567,7 @@ function canMake(stats) {
   const by = new Map(stats.map(s => [s.key, s]));
   return S.menu.filter(m => (m.ingredients || []).length).map(m => {
     let n = Infinity, limit = '';
-    for (const g of m.ingredients) { const st = by.get(ingKey(g.item)); const q = num(g.qty) || 1; const k = st ? Math.floor(Math.max(0, st.left) / q) : 0; if (k < n) { n = k; limit = g.item; } }
+    for (const g of m.ingredients) { const st = by.get(stockKey(m.kitchen, g.item)); const q = num(g.qty) || 1; const k = st ? Math.floor(Math.max(0, st.left) / q) : 0; if (k < n) { n = k; limit = g.item; } }
     return { m, n: n === Infinity ? 0 : n, limit };
   }).sort((a, b) => a.n - b.n);
 }
@@ -1564,8 +1596,8 @@ function viewInventory(root) {
         el('div', { class: 'ing-top' }, el('b', { text: s.name }), el('span', { class: 'ing-left', text: `${qtyText(s.left)} ${s.unit}`.trim() })),
         el('div', { class: 'gauge' }, el('i', { style: `width:${Math.round(s.fill * 100)}%` })),
         el('div', { class: 'ing-meta' }, el('span', { text: s.state === 'out' ? 'Out of stock' : s.days != null ? `≈ ${s.days < 1 ? 'less than a day' : Math.floor(s.days) + ' day' + (Math.floor(s.days) === 1 ? '' : 's')} left` : 'Not used this week' }),
-          el('button', { class: 'ing-plus', type: 'button', 'aria-label': 'Restock ' + s.name, onclick: e => { e.stopPropagation(); purchaseModal(null, { item: s.name, unit: s.unit }); } }, '+')))))
-        : el('div', { class: 'sub', style: 'padding:6px 4px', text: g === 'pizza' ? 'No pizza ingredients yet. Open an ingredient and set its group to Pizza.' : 'Nothing here yet.' })));
+          el('button', { class: 'ing-plus', type: 'button', 'aria-label': 'Restock ' + s.name, onclick: e => { e.stopPropagation(); purchaseModal(null, { item: s.name, unit: s.unit, kind: s.kitchen }); } }, '+')))))
+        : el('div', { class: 'sub', style: 'padding:6px 4px', text: g === 'pizza' ? 'Nothing yet. Add a purchase "For: 🍕 Pizza".' : 'Nothing yet. Add a purchase "For: 🍛 Others".' })));
   }
   const cm = canMake(stats);
   if (cm.length) root.append(el('section', { class: 'card can-make' }, el('h2', { text: 'Can still make' }),
@@ -1584,28 +1616,24 @@ function shoppingList(stats) {
 }
 function ingredientSheet(key) {
   const s = invStats().find(x => x.key === key); if (!s) return;
-  const cfg = Object.assign({ group: s.group, low: s.low || '' }, invCfg(key));
-  const seg = el('div', { class: 'seg', role: 'group' });
-  const drawSeg = () => seg.replaceChildren(...INV_GROUPS.map(([g, e, t]) => el('button', { type: 'button', id: 'ig-' + g, 'aria-pressed': cfg.group === g, onclick: () => { cfg.group = g; drawSeg(); } }, `${e} ${t}`)));
-  drawSeg();
-  const buys = S.purchases.filter(p => ingKey(p.item) === key).sort((a, b) => (b.day || '').localeCompare(a.day || ''));
-  const usedBy = S.menu.filter(m => (m.ingredients || []).some(g => ingKey(g.item) === key));
-  openModal(el('div', { class: 'sheet' }, el('h2', { text: s.name }),
+  const cfg = Object.assign({ low: s.low || '' }, invCfg(key));
+  const buys = S.purchases.filter(p => p.kind !== 'expense' && stockKey(p.kind, p.item) === key).sort((a, b) => (b.day || '').localeCompare(a.day || ''));
+  const usedBy = S.menu.filter(m => m.kitchen === s.kitchen && (m.ingredients || []).some(g => ingKey(g.item) === ingKey(s.name)));
+  openModal(el('div', { class: 'sheet' }, el('h2', {}, s.name, el('span', { class: 'tag kit ' + s.kitchen, text: KITCH[s.kitchen] })),
     el('div', { class: 'ing-stats' },
       el('div', {}, el('small', { text: 'In stock' }), el('b', { class: s.state, text: `${qtyText(s.left)} ${s.unit}`.trim() })),
       el('div', {}, el('small', { text: 'Used / day' }), el('b', { text: s.perDay ? `${qtyText(Math.round(s.perDay * 100) / 100)} ${s.unit}`.trim() : '—' })),
       el('div', {}, el('small', { text: 'Avg price' }), el('b', { text: s.unitCost ? `${money(Math.round(s.unitCost * 100) / 100)}/${s.unit || 'unit'}` : '—' }))),
-    el('div', { class: 'field' }, el('label', { text: 'Group' }), seg),
     el('div', { class: 'field' }, el('label', { for: 'ig-low', text: `Alert when below (${s.unit || 'units'})` }),
       el('input', { id: 'ig-low', type: 'number', inputmode: 'decimal', min: '0', step: 'any', value: cfg.low, placeholder: 'e.g. 5', oninput: e => { cfg.low = e.target.value; } })),
     usedBy.length ? el('div', { class: 'sub', text: 'Used in: ' + usedBy.map(m => m.name).join(', ') }) : el('div', { class: 'sub', text: 'Not used in any dish yet.' }),
     buys.length ? el('div', { class: 'ing-buys' }, el('b', { text: 'Bought' }), buys.slice(0, 6).map(p => el('div', { class: 'od-row' }, el('span', { text: `${dayLabel(p.day)} · ${qtyText(num(p.qty))} ${p.unit || ''}` }), el('span', { text: money(p.cost) })))) : null,
     el('div', { class: 'actions' },
-      el('button', { class: 'btn left', type: 'button', onclick: () => purchaseModal(null, { item: s.name, unit: s.unit }) }, '+ Restock'),
+      el('button', { class: 'btn left', type: 'button', onclick: () => purchaseModal(null, { item: s.name, unit: s.unit, kind: s.kitchen }) }, '+ Restock'),
       el('button', { class: 'btn', type: 'button', onclick: closeModal }, 'Close'),
       el('button', { class: 'btn primary', type: 'button', id: 'ig-save', onclick: async () => {
         const inv = Object.assign({}, S.settings.inventory || {});
-        inv[key] = { group: cfg.group, low: cfg.low === '' ? 0 : Math.max(0, Number(cfg.low) || 0) };
+        inv[key] = { low: cfg.low === '' ? 0 : Math.max(0, Number(cfg.low) || 0) };
         if (await write(Store.put('settings', Object.assign({}, S.settings, { inventory: inv, invTouched: true })), 'Saved')) closeModal();
       } }, 'Save'))));
 }
@@ -1622,12 +1650,19 @@ function purchasesList(root) {
     root.append(el('div', { class: 'plist' }, arr.map(p => el('button', { class: 'prow', type: 'button', onclick: () => purchaseModal(p) },
       el('div', { class: 'p-main' }, el('div', { class: 'nm', text: p.item || 'Item' }),
         el('div', { class: 'meta', text: [p.qty ? `${p.qty} ${p.unit || ''}`.trim() : '', p.note].filter(Boolean).join(' · ') })),
+      el('span', { class: 'tag kit ' + (p.kind || 'other'), text: p.kind === 'pizza' ? '🍕' : p.kind === 'expense' ? '🧾 Expense' : '🍛' }),
       (p.photos || []).length ? el('span', { class: 'tag', text: '📷 ' + p.photos.length }) : null,
       el('b', { class: 'p-cost', text: money(p.cost) })))));
   }
 }
 function purchaseModal(p0, pre) {
-  const p = p0 ? clone(p0) : Object.assign({ day: isoDay(Date.now()), item: '', qty: '', unit: '', cost: '', note: '', photos: [] }, pre || {});
+  const p = p0 ? clone(p0) : Object.assign({ day: isoDay(Date.now()), item: '', qty: '', unit: '', cost: '', note: '', photos: [], kind: '' }, pre || {});
+  const lastKind = name => { const x = S.purchases.filter(q => ingKey(q.item) === ingKey(name)).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0]; return x ? x.kind : ''; };
+  if (!p.kind) p.kind = 'other';
+  const kindSeg = el('div', { class: 'seg kind-seg', role: 'group', 'aria-label': 'For' });
+  const drawKind = () => kindSeg.replaceChildren(...[['pizza', '🍕 Pizza'], ['other', '🍛 Others'], ['expense', '🧾 Expense']].map(([k, l]) =>
+    el('button', { type: 'button', id: 'p-kind-' + k, 'aria-pressed': p.kind === k, onclick: () => { p.kind = k; p.kindPicked = true; drawKind(); } }, l)));
+  drawKind();
   const keep = (p.photos || []).slice(); const added = []; // {blob, url}
   const shots = el('div', { class: 'shots' });
   async function drawShots() {
@@ -1654,17 +1689,20 @@ function purchaseModal(p0, pre) {
     const photos = keep.slice();
     for (const a of added) { const path = `${S.uid}/receipt-${newId()}.jpg`; try { await queuePhoto(path, a.blob); photos.push(path); } catch (_) { return toast('Could not store a picture on this device.', true); } }
     const removed = (p0 && p0.photos || []).filter(x => !photos.includes(x));
-    const rec = { id: p0 ? p0.id : newId(), day: p.day || isoDay(Date.now()), item, qty: num(p.qty), unit: (p.unit || '').trim(), cost: num(p.cost), note: (p.note || '').trim(), photos, createdAt: p0 ? p0.createdAt : Date.now() };
+    const rec = { id: p0 ? p0.id : newId(), day: p.day || isoDay(Date.now()), item, qty: num(p.qty), unit: (p.unit || '').trim(), cost: num(p.cost), note: (p.note || '').trim(), photos, createdAt: p0 ? p0.createdAt : Date.now(),
+      kind: p.kind, kindTouched: !!(p.kind !== 'other' || (p0 && p0.kindTouched)) };
     if (await write(Store.put('purchases', rec, removed.flatMap(photoDelOp)), 'Saved')) closeModal();
   }
   drawShots();
   openModal(el('div', { class: 'sheet' }, el('h2', { text: p0 ? 'Edit purchase' : 'Add purchase' }),
     f('p-day', 'Date', 'day', { type: 'date' }),
-    el('div', { class: 'field' }, el('label', { for: 'p-item', text: 'Item' }), el('input', { id: 'p-item', list: 'p-items', value: p.item, placeholder: 'Chicken, flour, cooking gas…', oninput: e => { p.item = e.target.value; } }),
+    el('div', { class: 'field' }, el('label', { for: 'p-item', text: 'Item' }), el('input', { id: 'p-item', list: 'p-items', value: p.item, placeholder: 'Chicken, flour, cooking gas…', oninput: e => { p.item = e.target.value; if (!p0 && !p.kindPicked && lastKind(p.item)) { p.kind = lastKind(p.item); drawKind(); } } }),
       el('datalist', { id: 'p-items' }, items.map(x => el('option', { value: x })))),
     el('div', { class: 'row' }, f('p-qty', 'Quantity', 'qty', { type: 'number', inputmode: 'decimal', min: '0', step: 'any' }),
       el('div', { class: 'field' }, el('label', { for: 'p-unit', text: 'Unit' }), el('input', { id: 'p-unit', list: 'p-units', value: p.unit, placeholder: 'kg, pcs…', oninput: e => { p.unit = e.target.value; } }),
         el('datalist', { id: 'p-units' }, UNITS.map(x => el('option', { value: x }))))),
+    el('div', { class: 'field' }, el('label', { text: 'For' }), kindSeg,
+      el('div', { class: 'sub', text: 'Pizza / Others = goes into that kitchen\'s stock. Expense = only counted as spending (gas, rent, transport…).' })),
     f('p-cost', `Total cost (${S.settings.currency || ''})`, 'cost', { type: 'number', inputmode: 'decimal', min: '0', step: 'any' }),
     f('p-note', 'Note (shop, who paid…)', 'note'),
     el('div', { class: 'field' }, el('label', { text: 'Receipt / screenshot pictures' }), shots),
@@ -1948,11 +1986,12 @@ async function doRestore(data) {
 /* ---------- settings ---------- */
 function settingsModal() {
   const s = clone(S.settings);
-  const addrs = addrList().map(a => ({ id: a.id || newId(), name: a.name, fee: a.fee, was: a.name }));
+  const addrs = addrList().map(a => ({ id: a.id || newId(), name: a.name, fee: a.fee, feePizza: a.feePizza ?? '', was: a.name }));
   const abox = el('div', { class: 'addr-list' });
   const drawAddrs = () => abox.replaceChildren(...addrs.map((a, i) => el('div', { class: 'addr-row' },
     el('input', { value: a.name, placeholder: 'e.g. Chang\'an Uni West Gate', 'aria-label': 'Address name', oninput: e => { a.name = e.target.value; } }),
-    el('div', { class: 'fee-in' }, el('span', { text: s.currency || '' }), el('input', { type: 'number', inputmode: 'decimal', min: '0', step: '0.5', value: a.fee, placeholder: '0', 'aria-label': 'Delivery fee', oninput: e => { a.fee = e.target.value; } })),
+    el('div', { class: 'fee-in' }, el('span', { text: '🍛' }), el('input', { type: 'number', inputmode: 'decimal', min: '0', step: '0.5', value: a.fee, placeholder: '0', 'aria-label': 'Delivery fee (Others)', oninput: e => { a.fee = e.target.value; } })),
+    el('div', { class: 'fee-in' }, el('span', { text: '🍕' }), el('input', { type: 'number', inputmode: 'decimal', min: '0', step: '0.5', value: a.feePizza, placeholder: 'same', 'aria-label': 'Delivery fee (Pizza)', oninput: e => { a.feePizza = e.target.value; } })),
     el('button', { class: 'x', type: 'button', 'aria-label': 'Remove address', onclick: () => { addrs.splice(i, 1); drawAddrs(); } }, '✕'))),
     ...(addrs.length ? [] : [el('div', { class: 'sub', text: 'No addresses yet.' })]));
   drawAddrs();
@@ -1984,7 +2023,7 @@ function settingsModal() {
     f('s-name', 'Business name', 'name'),
     f('s-cur', 'Currency symbol', 'currency', { maxlength: '4' }),
     el('div', { class: 'sect' }, el('h3', { text: 'Delivery addresses' }),
-      el('div', { class: 'sub', text: 'Only these can be picked for a delivery. Fee 0 = free delivery.' }),
+      el('div', { class: 'sub', text: 'Only these can be picked for a delivery. 🍛 = fee for other dishes, 🍕 = fee when the order has pizza (empty = same). 0 = free.' }),
       abox, el('button', { class: 'link', type: 'button', style: 'align-self:flex-start', onclick: () => { addrs.push({ id: newId(), name: '', fee: '', was: '' }); drawAddrs(); const ins = abox.querySelectorAll('.addr-row input:not([type=number])'); if (ins.length) ins[ins.length - 1].focus(); } }, '+ Add address')),
     el('div', { class: 'sect' }, el('h3', { text: 'Pickup' }),
       el('label', { class: 'switch' }, el('input', { type: 'checkbox', id: 's-pickup', checked: s.pickup !== false, onchange: e => { s.pickup = e.target.checked; } }), 'Pickup available'),
@@ -1996,11 +2035,11 @@ function settingsModal() {
         payBlock('alipay', 'Alipay', 'alipayId', 'Alipay account (for paying in chat)', 'phone or email'))),
     el('div', { class: 'actions' }, el('button', { class: 'btn', type: 'button', onclick: closeModal }, 'Close'),
       el('button', { class: 'btn primary', type: 'button', id: 's-save', onclick: async () => {
-        const clean = addrs.map(a => ({ id: a.id, name: (a.name || '').trim(), fee: Math.max(0, Number(a.fee) || 0), was: a.was })).filter(a => a.name);
+        const clean = addrs.map(a => ({ id: a.id, name: (a.name || '').trim(), fee: Math.max(0, Number(a.fee) || 0), feePizza: a.feePizza === '' || a.feePizza == null ? '' : Math.max(0, Number(a.feePizza) || 0), was: a.was })).filter(a => a.name);
         const names = clean.map(a => a.name.toLowerCase());
         if (new Set(names).size !== names.length) return toast('Two addresses have the same name.', true);
         const rec = { id: 'main', name: (s.name || '').trim() || 'My kitchen', currency: s.currency || '', deliveryFee: num(S.settings.deliveryFee),
-          addresses: clean.map(({ id, name, fee }) => ({ id, name, fee })), addrTouched: true,
+          addresses: clean.map(({ id, name, fee, feePizza }) => (feePizza === '' ? { id, name, fee } : { id, name, fee, feePizza })), addrTouched: true,
           wechatQr: qr.wechat.path, alipayQr: qr.alipay.path, wechatId: (s.wechatId || '').trim(), alipayId: (s.alipayId || '').trim(),
           payCfgTouched: !!(S.settings.payCfgTouched || payChanged),
           pickup: s.pickup !== false, pkTouched: !!(S.settings.pkTouched || (s.pickup === false) !== (S.settings.pickup === false)),

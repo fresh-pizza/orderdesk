@@ -698,3 +698,24 @@ img.avatar{object-fit:cover;background:var(--surface2);display:block}
 .ing-buys{display:flex;flex-direction:column;gap:4px}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .inv-group.pizza{background:linear-gradient(160deg,#3A2A18,#2C2014)}:root:not([data-theme="light"]) .inv-group.other{background:linear-gradient(160deg,#1B2E21,#15241A)}:root:not([data-theme="light"]) .ig-title{color:#EEE}:root:not([data-theme="light"]) .ig-title small{color:#BBB}:root:not([data-theme="light"]) .dd-price-card{background:linear-gradient(90deg,#3A1F1A,#2F1814)}:root:not([data-theme="light"]) .inv-kpi.warn{background:#3A2A10;border-color:#7A5200}}
 .dd-scroll>*{flex:none}
+
+/* ===== 2.6: reviews with small photo, see all, lightbox ===== */
+.rev{flex-direction:row!important;align-items:flex-start;gap:10px}
+.rev-box .rev{flex-direction:column!important}
+.rev-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}
+.rev-body{display:flex;gap:10px;align-items:flex-start}
+.rev-body .rev-t{flex:1;min-width:0}
+.rev-thumb{flex:none;width:64px;height:64px;padding:0;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--surface2);cursor:zoom-in}
+.rev-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.rev-list{display:flex;flex-direction:column}
+.see-all{align-self:center;margin-top:8px;background:var(--surface2);border:0;border-radius:99px;padding:8px 16px;font:inherit;font-weight:600;font-size:14px;color:var(--ink)}
+.lightbox{position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.88);display:flex;align-items:center;justify-content:center;padding:16px;animation:pk-fade .12s ease-out}
+.lightbox img{max-width:100%;max-height:100%;border-radius:8px;object-fit:contain}
+.lb-x{position:absolute;top:calc(12px + env(safe-area-inset-top,0px));right:12px;width:40px;height:40px;border-radius:50%;border:0;background:rgba(255,255,255,.18);color:#fff;font-size:18px}
+/* ===== 2.7: kitchens ===== */
+.tag.kit.pizza{background:#FFE7CC;color:#9A4A00}
+.tag.kit.other{background:#DDF1E2;color:#22693F}
+.tag.kit.expense{background:var(--surface2);color:var(--muted)}
+h2 .tag.kit{margin-left:8px;font-size:12px;vertical-align:3px}
+.kind-seg button{flex:1}
+.addr-row{grid-template-columns:minmax(0,1fr) 84px 84px auto!important}

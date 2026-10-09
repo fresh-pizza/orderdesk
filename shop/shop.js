@@ -11,7 +11,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   phoneDomain: 'phone.orderdesk.app', // phone logins are stored as <digits>@this, no SMS involved
 };
-const SHOP_VERSION = '1.5.0';
+const SHOP_VERSION = '1.7.0';
 
 /* ---------- helpers ---------- */
 function el(tag, props, ...kids) {
@@ -52,8 +52,9 @@ const store = {
 };
 function dayLabel(day) {
   if (!day) return '';
-  if (day === isoDay(Date.now())) return 'Today';
-  if (day === isoDay(Date.now() + DAY)) return 'Tomorrow';
+  const today = chinaNow().day;
+  if (day === today) return 'Today';
+  if (day === addDays(today, 1)) return 'Tomorrow';
   const [y, m, d] = day.split('-').map(Number);
   return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
 }
@@ -129,7 +130,10 @@ const saveBasket = () => { store.set('basket', S.basket); store.set('draft', Obj
 const publicUrl = path => CFG.url + '/storage/v1/object/public/photos/' + path.split('/').map(encodeURIComponent).join('/');
 const dish = id => S.menu.find(m => m.id === id);
 const priceOf = (m, variant) => { const v = (m.variants || []).find(x => (x.label || '') === (variant || '')); return v ? num(v.price) : 0; };
-const addrFee = name => { const a = (S.biz.addresses || []).find(x => x.name === name); return a ? num(a.fee) : null; };
+/* delivery fee: orders with pizza use the address's pizza fee (when set) */
+const feeOf = (a, pizza) => (pizza && a.feePizza !== '' && a.feePizza != null ? num(a.feePizza) : num(a.fee));
+const basketPizza = () => S.basket.some(l => (dish(l.menuId) || {}).kitchen === 'pizza');
+const addrFee = (name, pizza = basketPizza()) => { const a = (S.biz.addresses || []).find(x => x.name === name); return a ? feeOf(a, pizza) : null; };
 const winLabel = w => `${w.from}–${w.to}`;
 
 let sb = null;
@@ -235,11 +239,27 @@ async function loadReviews() {
     S.reviewsOff = false; S.reviews = data || [];
   } catch (_) { /* offline */ }
 }
+/* full-size photo on tap */
+function openPhoto(src, alt) {
+  const ov = el('div', { class: 'lightbox', id: 'lightbox', role: 'dialog', 'aria-label': alt || 'Photo', onclick: () => ov.remove() },
+    el('img', { src, alt: alt || '' }), el('button', { class: 'lb-x', type: 'button', 'aria-label': 'Close' }, '✕'));
+  document.body.append(ov);
+}
+/* first few, then "See all" */
+function showSome(items, n, label) {
+  const box = el('div', { class: 'rev-list' });
+  const draw = all => box.replaceChildren(...(all ? items : items.slice(0, n)),
+    !all && items.length > n ? el('button', { class: 'see-all', type: 'button', id: 'see-all', onclick: () => draw(true) }, `See all ${items.length} ${label} ›`) : '');
+  draw(false);
+  return box;
+}
 function reviewEl(r) {
+  const src = r.photo ? publicUrl(r.photo) : '';
   return el('div', { class: 'rev' },
-    el('div', { class: 'rev-h' }, el('span', { class: 'stars', text: starStr(r.stars) }), el('b', { text: r.customer_name || 'Customer' }), el('small', { text: dayLabel(isoDay(Date.parse(r.created_at))) })),
-    r.body ? el('div', { class: 'rev-t', text: r.body }) : null,
-    r.photo ? el('img', { class: 'rev-img', src: publicUrl(r.photo), alt: 'Photo from a customer', loading: 'lazy' }) : null);
+    el('div', { class: 'rev-main' },
+      el('div', { class: 'rev-h' }, el('span', { class: 'stars', text: starStr(r.stars) }), el('b', { text: r.customer_name || 'Customer' }), el('small', { text: dayLabel(isoDay(Date.parse(r.created_at))) })),
+      r.body ? el('div', { class: 'rev-t', text: r.body }) : null),
+    src ? el('button', { class: 'rev-thumb', type: 'button', 'aria-label': 'Open photo', onclick: () => openPhoto(src, 'Photo from a customer') }, el('img', { src, alt: '', loading: 'lazy' })) : null);
 }
 async function loadSales() {
   try { const { data, error } = await sb.rpc('dish_sales'); if (!error && data) S.sales = new Map(data.map(r => [r.menu_id, Number(r.sold) || 0])); } catch (_) { /* fine */ }
@@ -250,7 +270,7 @@ function dishSheet(m) {
   const vs = (m.variants || []).map(v => num(v.price)), lo = Math.min(...vs), hi = Math.max(...vs);
   const rs = reviewsOf(m.id), r = ratingOf(m.id), good = rs.length ? Math.round(100 * rs.filter(x => x.stars >= 4).length / rs.length) : 0;
   const sold = S.sales.get(m.id) || 0, night = svcOf(m) === 'night';
-  const fees = (S.biz.addresses || []).map(a => num(a.fee)), minFee = fees.length ? Math.min(...fees) : 0;
+  const fees = (S.biz.addresses || []).map(a => feeOf(a, m.kitchen === 'pizza')), minFee = fees.length ? Math.min(...fees) : 0;
   const pic = m.photo ? el('img', { class: 'dd-img', src: publicUrl(m.photo), alt: m.name }) : el('div', { class: 'dd-img ph', style: '--h:' + hue(m.name), text: initial(m.name) });
   const ingCard = el('div', { class: 'dd-card', id: 'dd-ing' }, el('h3', { text: 'Ingredients' }),
     (m.ingredients || []).length ? el('div', { class: 'dd-grid' }, m.ingredients.map(g => el('div', { class: 'dd-cell' }, el('b', { text: g.item }), el('small', { text: 'Ingredient' }))))
@@ -278,7 +298,7 @@ function dishSheet(m) {
       el('div', { class: 'dd-info' }, el('span', { text: '✅' }), el('b', { text: 'Pay after we accept' }), el('span', { class: 'fineprint', text: 'WeChat Pay · Alipay' }))),
     ingCard,
     el('div', { class: 'dd-card' }, el('div', { class: 'dd-rev-h' }, el('h3', { text: `Reviews (${rs.length})` }), rs.length ? el('span', { class: 'dd-good', text: `${good}% positive 👍` }) : null),
-      rs.length ? rs.slice(0, 30).map(reviewEl) : el('div', { class: 'fineprint', text: 'No reviews yet. Be the first after your order arrives.' })));
+      rs.length ? showSome(rs.map(reviewEl), 3, 'reviews') : el('div', { class: 'fineprint', text: 'No reviews yet. Be the first after your order arrives.' })));
   const iconBtn = (ic, label, fn, badge) => el('button', { class: 'dd-ic', type: 'button', 'aria-label': label, onclick: fn }, el('span', { class: 'dd-ic-i', text: ic }), el('small', { text: label }), badge ? el('span', { class: 'tbadge', text: badge }) : null);
   openModal(el('div', { class: 'sheet dd shop-dd', id: 'dsheet' },
     el('div', { class: 'dd-top' }, el('button', { class: 'dd-round ds-x', type: 'button', 'aria-label': 'Close', onclick: closeModal }, '⌄')),
@@ -411,6 +431,15 @@ function renderBar() {
 }
 
 /* ---------- checkout ---------- */
+/* China time (Asia/Shanghai), whatever the phone's own time zone is */
+function chinaNow() {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+    .formatToParts(new Date()).map(x => [x.type, x.value]));
+  return { day: `${parts.year}-${parts.month}-${parts.day}`, time: `${parts.hour}:${parts.minute}` };
+}
+const addDays = (day, n) => { const [y, m, d] = day.split('-').map(Number); return isoDay(new Date(y, m - 1, d + n).getTime()); };
+/* a window like 12:00–14:00 is closed for today once 14:00 has passed in China */
+const winOpenToday = (label, now) => { const end = label.split('–')[1] || ''; return !end || end > now.time; };
 function orderWindows() {
   const withWin = S.basket.map(l => dish(l.menuId)).filter(m => m && (m.windows || []).length);
   const all = new Set();
@@ -426,8 +455,13 @@ function viewCheckout(root) {
   if (!basketCount()) { root.append(el('div', { class: 'empty' }, el('b', { text: 'Your basket is empty' }), el('button', { class: 'btn primary', type: 'button', onclick: () => go('menu') }, 'Back to the menu'))); return; }
   if (!S.biz.pickup) d.type = 'delivery';
   if (d.address && addrFee(d.address) === null) d.address = '';
-  if (!d.slotDate) d.slotDate = isoDay(Date.now());
-  const { list, clash } = orderWindows();
+  const now = chinaNow();
+  const { list: all, clash } = orderWindows();
+  const todayOpen = all.filter(x => winOpenToday(x, now));
+  // if every window has passed today, only tomorrow onwards can be chosen
+  const dates = [0, 1, 2, 3, 4, 5, 6].map(i => addDays(now.day, i)).filter(x => !(x === now.day && all.length && !todayOpen.length));
+  if (!d.slotDate || !dates.includes(d.slotDate)) d.slotDate = dates[0];
+  const list = d.slotDate === now.day ? todayOpen : all;
   if (d.slot && !list.includes(d.slot)) d.slot = '';
   const sub = basketTotal(), fee = d.type === 'delivery' ? (addrFee(d.address) || 0) : 0;
   const lines = S.basket.map((l, i) => {
@@ -442,7 +476,6 @@ function viewCheckout(root) {
   });
   const fld = (id, label, key, attrs) => el('div', { class: 'field' }, el('label', { for: id, text: label }),
     el('input', Object.assign({ id, value: d[key] || '', oninput: e => { d[key] = e.target.value; store.set('draft', d); } }, attrs)));
-  const dates = [0, 1, 2, 3, 4, 5, 6].map(i => isoDay(Date.now() + i * DAY));
   const err = el('div', { class: 'err', role: 'alert' });
   root.append(
     el('div', { class: 'box' }, el('h2', {}, el('span', { class: 'stepn', text: '1' }), 'Your order'), lines,
@@ -453,12 +486,13 @@ function viewCheckout(root) {
       d.type === 'delivery' ? el('div', { class: 'field' }, el('label', { for: 'c-addr', text: 'Delivery address' }),
         el('select', { id: 'c-addr', onchange: e => { d.address = e.target.value; render(); } },
           el('option', { value: '', text: 'Choose your address…' }),
-          (S.biz.addresses || []).map(a => el('option', { value: a.name, selected: a.name === d.address, text: `${a.name} — ${feeText(num(a.fee))}` })))) : null,
+          (S.biz.addresses || []).map(a => el('option', { value: a.name, selected: a.name === d.address, text: `${a.name} — ${feeText(feeOf(a, basketPizza()))}` })))) : null,
       el('div', { class: 'field' }, el('label', { text: d.type === 'delivery' ? 'Delivery time' : 'Pickup time' }),
         el('div', { class: list.length ? 'two' : '' },
-          el('select', { id: 'c-day', 'aria-label': 'Day', onchange: e => { d.slotDate = e.target.value; } }, dates.map(x => el('option', { value: x, selected: x === d.slotDate, text: dayLabel(x) }))),
+          el('select', { id: 'c-day', 'aria-label': 'Day', onchange: e => { d.slotDate = e.target.value; render(); } }, dates.map(x => el('option', { value: x, selected: x === d.slotDate, text: dayLabel(x) }))),
           list.length ? el('select', { id: 'c-slot', 'aria-label': 'Time', onchange: e => { d.slot = e.target.value; } },
             el('option', { value: '', text: 'Choose a time…', disabled: true, selected: !d.slot }), list.map(x => el('option', { value: x, selected: x === d.slot, text: x }))) : null),
+        all.length && !todayOpen.length ? el('div', { class: 'fineprint', id: 'c-tomorrow', text: 'Today\'s times have passed, so the earliest is tomorrow.' }) : null,
         clash ? el('div', { class: 'err', text: 'These dishes are served at different times. Please order them separately.' }) : null)),
     el('div', { class: 'box' }, el('h2', {}, el('span', { class: 'stepn', text: '3' }), 'Your details'),
       fld('c-name', 'WeChat name', 'name', { autocomplete: 'nickname', placeholder: 'Your WeChat name', maxlength: 80 }),
