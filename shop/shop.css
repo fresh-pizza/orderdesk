@@ -1,0 +1,70 @@
+/* Shop: one column, photo-led menu, a basket bar fixed above the safe area. Uses the tokens from app.css. */
+body.shop{padding-bottom:calc(84px + env(safe-area-inset-bottom,0px))}
+.shop .top{position:sticky;top:0;z-index:30;background:color-mix(in srgb,var(--bg) 92%,transparent);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border-bottom:1px solid var(--line);padding:calc(10px + env(safe-area-inset-top,0px)) 16px 10px;display:flex;align-items:center;gap:10px}
+.shop .top .biz{font-family:var(--font-display);font-weight:700;font-size:20px;margin-right:auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:none;border:0;padding:0;text-align:left;color:var(--ink)}
+.shop .top .tab{background:none;border:1px solid var(--line);border-radius:99px;padding:6px 12px;font-weight:600;font-size:14px;color:var(--muted)}
+.shop .top .tab[aria-current="page"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.shop main{max-width:760px;margin:0 auto;padding:14px 16px 24px}
+.shop .intro{color:var(--muted);font-size:14px;margin:0 0 12px}
+.shop .chips{position:sticky;top:calc(58px + env(safe-area-inset-top,0px));z-index:20;background:var(--bg);padding:6px 16px 8px;margin:0 -16px 10px;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
+.shop .chips::-webkit-scrollbar{display:none}
+.shop .chip{flex:none}
+.dishes{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px}
+.dish{background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden;display:flex;flex-direction:column;box-shadow:var(--shadow);min-width:0}
+.dish .img,.dish .ph{aspect-ratio:4/3;width:100%;object-fit:cover;font-size:38px}
+.dish .img{display:block}
+.dish .body{padding:10px 12px 12px;display:flex;flex-direction:column;gap:4px;flex:1}
+.dish h3{font-size:16px;margin:0;overflow-wrap:anywhere}
+.dish .desc{color:var(--muted);font-size:13px;line-height:1.35}
+.dish .win{color:var(--accent-ink);font-size:12px;font-weight:600}
+.dish .foot{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:auto;padding-top:6px}
+.dish .price{font-family:var(--font-mono);font-weight:500}
+.dish .add{background:var(--accent);color:var(--on-accent);border:0;border-radius:99px;min-width:36px;height:36px;padding:0 12px;font-weight:700;font-size:15px}
+.dish .add.in{background:var(--ink);color:var(--bg)}
+.dish.off{opacity:.5}
+.cat-h{font-family:var(--font-display);font-size:19px;margin:10px 0 0;grid-column:1/-1}
+#bar{position:fixed;left:0;right:0;bottom:0;z-index:35;padding:10px 16px calc(10px + env(safe-area-inset-bottom,0px));pointer-events:none}
+#bar .go{pointer-events:auto;max-width:728px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;background:var(--ink);color:var(--bg);border:0;border-radius:14px;padding:14px 18px;font-weight:600;font-size:16px;box-shadow:0 6px 18px rgba(0,0,0,.25)}
+#bar .go b{font-family:var(--font-mono);font-weight:500}
+.box{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:10px;margin-bottom:12px}
+.box h2{font-size:17px;margin:0}
+.line{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:10px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)}
+.line:last-child{border-bottom:0}
+.line .nm{overflow-wrap:anywhere}
+.line .nm small{color:var(--muted)}
+.line .pr{font-family:var(--font-mono);font-size:14px;white-space:nowrap}
+.sumrow{display:flex;justify-content:space-between;font-variant-numeric:tabular-nums}
+.sumrow.total{font-family:var(--font-mono);font-size:18px;border-top:2px dashed var(--line);padding-top:8px}
+.fineprint{color:var(--muted);font-size:12.5px}
+.shop .field select{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:9px 10px;width:100%;min-width:0}
+.two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px}
+.big-btn{width:100%;padding:13px;font-size:16px}
+.err{color:var(--chilli);font-size:14px}
+.tabs3{display:grid;grid-template-columns:repeat(3,1fr);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.tabs3 button{background:var(--surface);border:0;padding:9px 4px;font-weight:600;color:var(--muted)}
+.tabs3 button[aria-pressed="true"]{background:var(--ink);color:var(--bg)}
+.ocard{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:8px;margin-bottom:12px}
+.ocard .oh{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.ocard .t-no{font-family:var(--font-mono)}
+.ocard .when{font-size:13px}
+.steps{display:grid;grid-template-columns:repeat(4,1fr);gap:4px}
+.steps span{height:5px;border-radius:99px;background:var(--line)}
+.steps span.on{background:var(--leaf)}
+.steplbl{display:flex;justify-content:space-between;font-size:12px;color:var(--muted)}
+.steplbl b{color:var(--ink)}
+.paybox{background:var(--accent-bg);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:8px}
+.paybox.ok{background:var(--leaf-bg);color:var(--leaf)}
+.done-hero{text-align:center;padding:18px 8px 6px}
+.done-hero .no{display:inline-block;background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-size:26px;font-weight:700;padding:4px 14px;border-radius:10px;margin:6px 0}
+.shot-prev{max-width:180px;border-radius:8px;border:1px solid var(--line)}
+
+/* menu as rows with the photo on the left, like delivery apps; two columns on wide screens */
+@media all{
+  .dishes{grid-template-columns:minmax(0,1fr);gap:8px}
+  .dish{flex-direction:row;border-radius:12px}
+  .dish .img,.dish .ph{width:104px;min-width:104px;aspect-ratio:1;height:auto;font-size:30px;align-self:stretch}
+  .dish .body{padding:10px 12px}
+  .dish h3{font-size:15.5px}
+  .cat-h{margin:12px 0 2px}
+}
+@media (min-width:720px){.dishes{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}}

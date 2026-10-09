@@ -413,3 +413,7 @@ img.avatar{object-fit:cover;background:var(--surface2);display:block}
   .stat-table{font-size:13px}
   .stat-table th,.stat-table td{padding:7px 8px}
 }
+/* 2.1: shop orders, progress */
+.tag.shop{background:var(--accent-bg);color:var(--accent-ink)}
+.pill.check{background:var(--accent);color:var(--on-accent)}
+.stepnow{font-size:13px;font-weight:600;color:var(--leaf)}

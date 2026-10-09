@@ -1,5 +1,5 @@
 /* Order Desk service worker: keeps the app itself on the device so it opens with no internet. */
-const VERSION = 'od-2.0.0';
+const VERSION = 'od-2.1.0';
 const SHELL = ['./', 'index.html', 'app.css', 'app.js', 'supabase.js', 'manifest.webmanifest',
   'icon-192.png', 'apple-touch-icon.png',
   'bricolage-grotesque-latin-600-normal.woff2', 'bricolage-grotesque-latin-700-normal.woff2',
@@ -35,6 +35,7 @@ self.addEventListener('fetch', e => {
     return;
   }
   if (url.origin !== self.location.origin) return; // database and login go straight to the network
+  if (url.pathname.includes('/shop/')) return; // the client shop is online-only and not part of this app
   // the app itself: from the device, instantly
   e.respondWith((async () => {
     const c = await caches.open(VERSION);

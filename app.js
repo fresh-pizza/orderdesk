@@ -9,7 +9,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   bucket: 'photos',
 };
-const VERSION = '2.0.0';
+const VERSION = '2.1.0';
 const COLLS = ['menu', 'customers', 'orders', 'settings', 'purchases'];
 const DEFAULT_SETTINGS = { id: 'main', name: 'My kitchen', currency: '¥', deliveryFee: 0, addresses: [] };
 
@@ -100,7 +100,7 @@ const IDB = (() => {
 })();
 
 /* ---------- app state ---------- */
-const ST = { new: 'Active', cooking: 'Active', ready: 'Active', done: 'Active', cancelled: 'Cancelled' };
+const ST = { new: 'Received', cooking: 'Received', accepted: 'Accepted', ready: 'Ready', done: 'Done', cancelled: 'Cancelled' };
 const PAY = { wechat: 'WeChat Pay', alipay: 'Alipay' };
 const isCancelled = o => o.status === 'cancelled';
 const isUnpaid = o => !isCancelled(o) && !o.paid;
@@ -195,7 +195,8 @@ const MAP = {
       r.slotTouched ? { slot_date: r.slotDate || '', slot: r.slot || '' } : {}),
     from: x => ({ id: x.id, no: x.no, customerId: x.customer_id || null, customerName: x.customer_name, phone: x.phone, address: x.address, type: x.type, items: x.items || [], subtotal: num(x.subtotal), fee: num(x.fee), total: num(x.total), note: x.note, status: x.status, createdAt: toMs(x.created_at), deleted: !!x.deleted,
       paid: !!x.paid, payMethod: x.pay_method || '', payProof: x.pay_proof || '', paidAt: x.paid_at ? toMs(x.paid_at) : 0, payTouched: x.paid !== undefined,
-      slotDate: x.slot_date || '', slot: x.slot || '', slotTouched: x.slot !== undefined }),
+      slotDate: x.slot_date || '', slot: x.slot || '', slotTouched: x.slot !== undefined,
+      source: x.source || 'admin', paySubmittedAt: x.pay_submitted_at ? toMs(x.pay_submitted_at) : 0 }),
   },
   purchases: {
     to: r => ({ id: r.id, day: r.day || isoDay(Date.now()), item: r.item || '', qty: num(r.qty), unit: r.unit || '', cost: num(r.cost), note: r.note || '', photos: r.photos || [], created_at: toIso(r.createdAt), deleted: !!r.deleted }),
@@ -535,8 +536,21 @@ function slotText(o) {
 }
 const custOf = o => (o.customerId && M.customers.get(o.customerId)) || null;
 function whoAvatar(o, cls) { const c = custOf(o); return avatar({ name: o.customerName || 'Walk-in', photo: c && !c.deleted ? c.photo : '' }, cls); }
+/* progress the client sees: Received -> Accepted -> Ready / On the way -> Done */
+function nextStep(o) {
+  if (isCancelled(o)) return null;
+  const s = o.status;
+  if (s === 'accepted') return ['ready', o.type === 'delivery' ? 'On the way' : 'Ready'];
+  if (s === 'ready') return ['done', 'Done'];
+  if (s === 'done') return null;
+  return ['accepted', 'Accept'];
+}
+function stepText(o) {
+  return { accepted: 'Accepted · cooking', ready: o.type === 'delivery' ? 'On the way' : 'Ready for pickup', done: 'Done' }[o.status] || '';
+}
 function payPill(o) {
   if (isCancelled(o)) return el('span', { class: 'pill cancelled', text: 'Cancelled' });
+  if (!o.paid && o.paySubmittedAt) return el('span', { class: 'pill check', text: 'Check payment' });
   return o.paid ? el('span', { class: 'pill paid', text: 'Paid' + (PAY[o.payMethod] ? ' · ' + PAY[o.payMethod].replace(' Pay', '') : '') })
     : el('span', { class: 'pill unpaid', text: 'Unpaid' });
 }
@@ -554,19 +568,23 @@ function ticket(o) {
     acts.push(el('button', { class: 'btn small', type: 'button', onclick: e => { e.stopPropagation(); setStatus(o, 'new'); } }, 'Reopen'));
     acts.push(confirmBtn('Delete', 'Delete for good?', () => write(Store.remove('orders', o.id), 'Order deleted'), 'danger'));
   } else if (!o.paid) {
-    acts.push(el('button', { class: 'btn small pay', type: 'button', onclick: e => { e.stopPropagation(); payModal(o); } }, 'Mark paid'));
+    acts.push(el('button', { class: 'btn small pay', type: 'button', onclick: e => { e.stopPropagation(); payModal(o); } }, o.paySubmittedAt ? 'Check & confirm' : 'Mark paid'));
     acts.push(confirmBtn('Cancel', 'Sure?', () => setStatus(o, 'cancelled'), 'danger'));
   } else {
-    acts.push(el('span', { class: 'paid-note', text: '✓ ' + (PAY[o.payMethod] || 'Paid') + (o.payProof ? ' · screenshot' : '') }));
+    const nx = nextStep(o);
+    if (nx) acts.push(el('button', { class: 'btn small primary', type: 'button', onclick: e => { e.stopPropagation(); setStatus(o, nx[0]); } }, nx[1]));
+    else acts.push(el('span', { class: 'paid-note', text: '✓ ' + (PAY[o.payMethod] || 'Paid') + (o.payProof ? ' · screenshot' : '') }));
   }
   return el('article', { class: 'ticket ' + (isCancelled(o) ? 't-cancelled' : o.paid ? 't-paid' : 't-unpaid'), 'data-id': o.id, tabindex: '0',
     onclick: () => orderSheet(o), onkeydown: e => { if (e.key === 'Enter') orderSheet(o); } },
     el('div', { class: 't-head' },
       el('span', { class: 't-no', text: orderNo(o.no) }),
       el('span', { class: 't-time', text: timeStr(o.createdAt) + (sameDay ? '' : ' · ' + dateShort(o.createdAt)) }),
+      o.source === 'shop' ? el('span', { class: 'tag shop', text: 'Shop' }) : null,
       el('span', { class: 'tag', text: o.type === 'delivery' ? 'Delivery' : 'Pickup' }),
       payPill(o)),
     el('div', { class: 't-body' },
+      stepText(o) ? el('div', { class: 'stepnow', text: stepText(o) }) : null,
       el('div', { class: 'who' }, whoAvatar(o, 'sm'), el('span', { class: 'who-nm' }, o.customerName || 'Walk-in', o.phone ? el('small', { text: o.phone }) : null)),
       o.address ? el('div', { class: 'addr', text: o.address }) : null,
       slotText(o) ? el('div', { class: 'when', text: '🕒 ' + slotText(o) }) : null,
@@ -597,13 +615,16 @@ function orderSheet(o0) {
       el('div', { class: 'btns' }, el('button', { class: 'btn pay', type: 'button', onclick: () => payModal(o) }, 'Mark paid')));
   openModal(el('div', { class: 'sheet' },
     el('div', { class: 'od-head' }, el('h2', { text: `Order ${orderNo(o.no)}` }), payPill(o)),
-    el('div', { class: 'sub', text: `Taken ${dateShort(o.createdAt)} ${timeStr(o.createdAt)} · ${o.type === 'delivery' ? 'Delivery' : 'Pickup'}` }),
+    el('div', { class: 'sub', text: `${o.source === 'shop' ? 'Ordered in the shop' : 'Taken'} ${dateShort(o.createdAt)} ${timeStr(o.createdAt)} · ${o.type === 'delivery' ? 'Delivery' : 'Pickup'}` }),
     slotText(o) ? el('div', { class: 'when', text: '🕒 ' + slotText(o) }) : null,
     el('div', { class: 'who-head' }, whoAvatar(o, 'big'), el('div', {}, el('b', { text: o.customerName || 'Walk-in' }), o.phone ? el('div', { class: 'sub', text: o.phone }) : null, o.address ? el('div', { class: 'sub', text: o.address }) : null)),
     el('ul', { class: 'lines' }, itemLines(o)),
     el('div', { class: 'sum total' }, el('span', { text: 'Total' }), el('span', { text: money(o.total) })),
     o.note ? el('div', { class: 'note', text: o.note }) : null,
     payPart,
+    !isCancelled(o) ? el('div', { class: 'sect' }, el('h3', { text: 'Progress (the client sees this)' }),
+      el('div', { class: 'seg', role: 'group' }, [['new', 'Received'], ['accepted', 'Accepted'], ['ready', o.type === 'delivery' ? 'On the way' : 'Ready'], ['done', 'Done']].map(([k, l]) =>
+        el('button', { type: 'button', 'aria-pressed': (o.status === k || (k === 'new' && !['accepted', 'ready', 'done'].includes(o.status))), onclick: async () => { await setStatus(o, k); orderSheet(o); } }, l)))) : null,
     el('div', { class: 'actions' },
       isCancelled(o) ? el('button', { class: 'btn small left', type: 'button', onclick: () => { setStatus(o, 'new'); closeModal(); } }, 'Reopen')
         : confirmBtn('Cancel order', 'Cancel it?', () => { setStatus(o, 'cancelled'); closeModal(); }, 'danger left'),
@@ -1474,6 +1495,7 @@ async function onSession(session) {
   await IDB.batch([{ store: 'meta', key: 'uid', val: uid }, { store: 'meta', key: 'email', val: S.email }]);
   await checkRole();
   if (S.notAdmin) { stopRealtime(); return; }
+  S.loginOpen = false; $('#login').hidden = true; // signed in: the sign-in screen is no longer needed
   try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (_) { /* ignore */ }
   startRealtime(); Sync.soon(0);
 }
