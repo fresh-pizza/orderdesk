@@ -11,7 +11,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   phoneDomain: 'phone.orderdesk.app', // phone logins are stored as <digits>@this, no SMS involved
 };
-const SHOP_VERSION = '2.3.7';
+const SHOP_VERSION = '2.3.8';
 /* phones (WeChat especially) keep old copies of web pages; if a newer shop is online, reload it */
 (async function freshness() {
   try {

@@ -3,9 +3,9 @@
    comes live from the server — this only caches the app's own files (and dish
    photos), not the data. Scope is this folder (/shop/) only; it never touches
    the admin app or its own service worker at the parent level. */
-const VERSION = 'od-shop-2.3.7';
-const SHELL = ['./', 'index.html', 'shop.css?v=2.3.7', 'shop.js?v=2.3.7',
-  '../app.css?v=2.3.7', '../supabase.js', '../icon-192.png', '../apple-touch-icon.png'];
+const VERSION = 'od-shop-2.3.8';
+const SHELL = ['./', 'index.html', 'shop.css?v=2.3.8', 'shop.js?v=2.3.8',
+  '../app.css?v=2.3.8', '../supabase.js', '../icon-192.png', '../apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL.map(u => new Request(u, { cache: 'reload' })))));
