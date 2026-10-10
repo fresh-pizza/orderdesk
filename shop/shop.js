@@ -11,7 +11,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   phoneDomain: 'phone.orderdesk.app', // phone logins are stored as <digits>@this, no SMS involved
 };
-const SHOP_VERSION = '2.3.1';
+const SHOP_VERSION = '2.3.2';
 /* phones (WeChat especially) keep old copies of web pages; if a newer shop is online, reload it */
 (async function freshness() {
   try {
@@ -1051,6 +1051,7 @@ function orderCard(o) {
       el('span', { class: 'sub', text: new Date(o.created_at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) + ' ' + timeStr(Date.parse(o.created_at)) }),
       S.biz.pickup || o.type === 'pickup' ? el('span', { class: 'tag', style: 'margin-left:auto', text: o.type === 'delivery' ? 'Delivery' : 'Pickup' }) : null),
     o.status === 'cancelled' ? el('div', { class: 'err', text: 'Cancelled' })
+      : o.refunded ? el('div', { class: 'ostatus refunded', text: 'Refunded' + (num(o.refund_amount) ? ' · ' + money(num(o.refund_amount)) + ' back to you' : '') })
       : el('div', {}, el('div', { class: 'ostatus', text: statusLine(o) }),
         el('div', { class: 'steps' }, STEPS.map((s, i) => el('span', { class: i <= idx ? 'on' : '' }))),
         el('div', { class: 'steplbl' }, STEPS.map((s, i) => i === idx ? el('b', { text: stepLabel(o, s) }) : el('span', { text: stepLabel(o, s) })))),
@@ -1058,8 +1059,9 @@ function orderCard(o) {
     el('ul', { class: 'lines' }, (o.items || []).map(it => el('li', {}, el('span', { text: `${it.qty}× ${it.name}${it.variant ? ' (' + it.variant + ')' : ''}` }), el('span', { text: money(num(it.price) * it.qty) }))),
       o.type === 'delivery' ? el('li', {}, el('span', { text: 'Delivery · ' + o.address }), el('span', { text: feeText(num(o.fee)) })) : null),
     el('div', { class: 'sumrow total' }, el('span', { text: 'Total' }), el('span', { text: money(o.total) })),
-    payBox(o),
+    o.refunded ? null : payBox(o),
     o.delivery_proof ? el('div', { class: 'proofbox' }, el('b', { text: o.type === 'delivery' ? 'Delivery photo' : 'Photo' }), privatePic(o.delivery_proof, 'Delivery photo')) : null,
+    o.refunded && o.refund_proof ? el('div', { class: 'proofbox' }, el('b', { text: 'Refund screenshot' }), privatePic(o.refund_proof, 'Refund screenshot')) : null,
     o.status === 'done' && !S.reviewsOff ? (() => { const mine = S.reviews.find(r => r.order_id === o.id);
       return el('button', { class: mine ? 'my-rev' : 'btn small primary', type: 'button', id: 'rv-' + o.no, style: 'align-self:flex-start', onclick: () => reviewSheet(o) },
         mine ? [el('span', { class: 'stars', text: starStr(mine.stars) }), ' Your review · edit'] : '★ Write a review'); })() : null,

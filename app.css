@@ -756,3 +756,11 @@ h2 .tag.kit{margin-left:8px;font-size:12px;vertical-align:3px}
 .arr-mv{display:flex;gap:6px}
 .arr-mv .btn{min-width:38px;padding:6px 8px}
 .ord-sticky:not(:first-child){margin-top:0;padding-top:8px}
+
+/* 2.11: refund */
+.pill.refunded{background:var(--surface2);color:var(--muted)}
+.ticket.t-refunded{opacity:.72}
+.ticket.t-refunded .t-no{text-decoration:line-through}
+.seg3{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;background:var(--surface2);border-radius:10px;padding:4px}
+.seg3 button{border:0;background:none;border-radius:8px;padding:9px 4px;font-weight:600;color:var(--muted);font-size:14px}
+.seg3 button[aria-pressed="true"]{background:var(--surface);color:var(--ink);box-shadow:var(--shadow)}

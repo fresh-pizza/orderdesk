@@ -9,7 +9,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   bucket: 'photos',
 };
-const VERSION = '2.10.1';
+const VERSION = '2.12.0';
 const COLLS = ['menu', 'customers', 'orders', 'settings', 'purchases'];
 const DEFAULT_SETTINGS = { id: 'main', name: 'My kitchen', currency: '¥', deliveryFee: 0, addresses: [], wechatQr: '', alipayQr: '', wechatId: '', alipayId: '', pickup: true, inventory: {} };
 
@@ -204,8 +204,9 @@ function payLogo(m) {
   return el('img', { class: 'paylogo', src: `pay-${b}.png`, alt: b === 'wechat' ? 'WeChat Pay' : 'Alipay', onerror: e => e.target.replaceWith(el('span', { class: 'paylogo fb ' + b })) });
 }
 const isCancelled = o => o.status === 'cancelled';
-const isUnpaid = o => !isCancelled(o) && !o.paid;
-const isOpenOrder = o => !isCancelled(o) && !(o.paid && o.status === 'done'); // not yet both paid and delivered
+const isRefunded = o => !!o.refunded;
+const isUnpaid = o => !isCancelled(o) && !isRefunded(o) && !o.paid;
+const isOpenOrder = o => !isCancelled(o) && !isRefunded(o) && !(o.paid && o.status === 'done'); // not yet both paid and delivered
 const M = { menu: new Map(), customers: new Map(), orders: new Map(), settings: new Map(), purchases: new Map() };
 const S = {
   ready: false, uid: null, email: '', signedIn: false,
@@ -265,7 +266,7 @@ function photoDelOp(path) {
   S.outbox.set(key, entry);
   return [{ store: 'outbox', key, val: entry }];
 }
-const bucketFor = path => (/\/(receipt|delivered)-/.test(path) ? 'receipts' : CFG.bucket); // private: payment screenshots, delivery photos
+const bucketFor = path => (/\/(receipt|delivered|refund)-/.test(path) ? 'receipts' : CFG.bucket); // private: payment screenshots, delivery photos
 async function receiptSrc(path) { // private: fetched with your login, kept in memory
   if (!path) return '';
   if (S.blobUrls.has(path)) return S.blobUrls.get(path);
@@ -303,10 +304,12 @@ const MAP = {
     to: r => Object.assign({ id: r.id, no: r.no || 0, customer_id: r.customerId || null, customer_name: r.customerName || '', phone: r.phone || '', address: r.address || '', type: r.type || 'delivery', items: r.items || [], subtotal: num(r.subtotal), fee: num(r.fee), total: num(r.total), note: r.note || '', status: r.status || 'new', created_at: toIso(r.createdAt), deleted: !!r.deleted },
       r.payTouched ? { paid: !!r.paid, pay_method: r.payMethod || '', pay_proof: r.payProof || '', paid_at: r.paidAt ? toIso(r.paidAt) : null } : {},
       r.slotTouched ? { slot_date: r.slotDate || '', slot: r.slot || '' } : {},
-      r.delTouched ? { delivery_proof: r.deliveryProof || '' } : {}),
+      r.delTouched ? { delivery_proof: r.deliveryProof || '' } : {},
+      r.refundTouched ? { refunded: !!r.refunded, refunded_at: r.refundedAt ? toIso(r.refundedAt) : null, refund_amount: num(r.refundAmount), refund_method: r.refundMethod || '', refund_proof: r.refundProof || '' } : {}),
     from: x => ({ id: x.id, no: x.no, customerId: x.customer_id || null, customerName: x.customer_name, phone: x.phone, address: x.address, type: x.type, items: x.items || [], subtotal: num(x.subtotal), fee: num(x.fee), total: num(x.total), note: x.note, status: x.status, createdAt: toMs(x.created_at), deleted: !!x.deleted,
       paid: !!x.paid, payMethod: x.pay_method || '', payProof: x.pay_proof || '', paidAt: x.paid_at ? toMs(x.paid_at) : 0, payTouched: x.paid !== undefined,
       slotDate: x.slot_date || '', slot: x.slot || '', slotTouched: x.slot !== undefined,
+      refunded: !!x.refunded, refundedAt: x.refunded_at ? toMs(x.refunded_at) : 0, refundAmount: num(x.refund_amount), refundMethod: x.refund_method || '', refundProof: x.refund_proof || '', refundTouched: x.refunded !== undefined,
       source: x.source || 'admin', paySubmittedAt: tsMs(x.pay_submitted_at), clientId: x.client_id || '',
       acceptedAt: tsMs(x.accepted_at), readyAt: tsMs(x.ready_at), doneAt: tsMs(x.done_at), deliveryProof: x.delivery_proof || '', delTouched: x.delivery_proof !== undefined,
       clientLogin: x.client_login || '' }),
@@ -514,7 +517,7 @@ async function write(promise, okMsg) {
 function custStats() {
   const m = new Map();
   for (const o of S.orders) {
-    if (!o.customerId || o.status === 'cancelled') continue;
+    if (!o.customerId || o.status === 'cancelled' || isRefunded(o)) continue;
     const s = m.get(o.customerId) || { n: 0, spent: 0, last: 0, items: new Map() };
     s.n++; s.spent += o.total || 0; s.last = Math.max(s.last, o.createdAt || 0);
     for (const it of o.items || []) s.items.set(it.name, (s.items.get(it.name) || 0) + (it.qty || 0));
@@ -656,13 +659,14 @@ function tile(label, value, hot) { return el('div', { class: 'tile' + (hot ? ' h
 function viewOrders(root) {
   const head = pageHead(['Orders', el('span', { class: 'h-date', text: new Date().toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }) })], '',
     el('button', { class: 'btn primary hide-m', type: 'button', onclick: () => go('new') }, '+ New order'));
-  const paidN = S.orders.filter(o => !isCancelled(o) && o.paid).length;
+  const paidN = S.orders.filter(o => !isCancelled(o) && !isRefunded(o) && o.paid).length;
   const unpaidN = S.orders.filter(isUnpaid).length;
   const cancN = S.orders.filter(isCancelled).length;
   const isDone = isComplete;
   const doneN = S.orders.filter(isDone).length;
   const openN = S.orders.filter(isOpenOrder).length;
-  const filters = [['all', 'All'], ['open', `Open (${openN})`], ['paid', `Paid (${paidN})`], ['unpaid', `Unpaid (${unpaidN})`], ['done', `Completed (${doneN})`], ['cancelled', `Cancelled (${cancN})`]];
+  const refN = S.orders.filter(isRefunded).length;
+  const filters = [['all', 'All'], ['open', `Open (${openN})`], ['paid', `Paid (${paidN})`], ['unpaid', `Unpaid (${unpaidN})`], ['done', `Completed (${doneN})`], ['cancelled', `Cancelled (${cancN})`], ['refunded', `Refunded (${refN})`]];
   if (!filters.some(([k]) => k === S.ordFilter)) S.ordFilter = 'open';
   const chips = el('div', { class: 'chips' }, filters.map(([k, label]) =>
     el('button', { class: 'chip', type: 'button', 'aria-pressed': S.ordFilter === k, onclick: () => { S.ordFilter = k; S.ordLimit = 60; render(true); } }, label)));
@@ -675,7 +679,7 @@ function viewOrders(root) {
         el('span', { text: l }), el('b', { text: cnt(k) }))));
   } else S.svc = 'all';
   root.append(el('div', { class: 'ord-sticky' }, head, chips, seg));
-  const keep0 = { all: () => true, open: isOpenOrder, paid: o => !isCancelled(o) && o.paid, unpaid: isUnpaid, done: isDone, cancelled: isCancelled }[S.ordFilter];
+  const keep0 = { all: () => true, open: isOpenOrder, paid: o => !isCancelled(o) && !isRefunded(o) && o.paid, unpaid: isUnpaid, done: isDone, cancelled: isCancelled, refunded: isRefunded }[S.ordFilter];
   const keep = o => keep0(o) && (S.svc === 'all' || orderSvc(o) === S.svc);
   const list = S.orders.filter(keep).sort((a, b) => b.createdAt - a.createdAt);
   if (!list.length) {
@@ -737,6 +741,7 @@ const SVC = { day: '☀ Day', night: '🌙 Night' };
 const hasNight = () => S.menu.some(m => m.service === 'night');
 function payPill(o) {
   if (isCancelled(o)) return el('span', { class: 'pill cancelled', text: 'Cancelled' });
+  if (isRefunded(o)) return el('span', { class: 'pill refunded' }, 'Refunded');
   if (!o.paid && o.paySubmittedAt) return el('span', { class: 'pill check' }, payLogo(o.payMethod), o.payProof ? 'Check payment' : 'Check chat');
   return o.paid ? el('span', { class: 'pill paid' }, payLogo(o.payMethod), 'Paid')
     : el('span', { class: 'pill unpaid', text: 'Unpaid' });
@@ -751,8 +756,8 @@ function itemLines(o) {
 /* the buttons for where the order is now (tickets and order details share them)
    New: Accept / Cancel.  Accepted: Mark paid · On the way · Cancel.  On the way: Mark paid · Delivered.
    Paid and Delivered are separate; the order is Completed once it is both. */
-const isComplete = o => !isCancelled(o) && o.status === 'done' && o.paid;
-function orderActions(o, after) {
+const isComplete = o => !isCancelled(o) && !isRefunded(o) && o.status === 'done' && o.paid;
+function orderActions(o, after, details) {
   const done = () => { if (after) after(); };
   const stop = fn => e => { if (e) e.stopPropagation(); fn(); };
   const acts = [];
@@ -761,6 +766,7 @@ function orderActions(o, after) {
     acts.push(confirmBtn('Delete', 'Delete for good?', async () => { if (await write(Store.remove('orders', o.id, [...photoDelOp(o.payProof), ...photoDelOp(o.deliveryProof)]), 'Order deleted')) closeModal(); }, 'danger'));
     return acts;
   }
+  if (isRefunded(o)) return acts; // refunds are shown and undone in the Refund section at the bottom
   const cancel = () => confirmBtn('Cancel', 'Sure?', async () => { await setStatus(o, 'cancelled'); done(); }, 'danger');
   const payBtn = () => el('button', { class: 'btn small pay', type: 'button', onclick: stop(() => payModal(o)) }, o.paySubmittedAt ? 'Check & mark paid' : 'Mark paid');
   if (isNew(o) && o.source === 'shop') {
@@ -777,6 +783,47 @@ function orderActions(o, after) {
     else acts.push(el('span', { class: 'paid-note', text: '✓ Completed' }));
   }
   return acts;
+}
+/* Refund a paid order: records the amount + method, takes it out of sales. */
+function refundSheet(o0, after) {
+  const o = M.orders.get(o0.id) || o0;
+  const amount = num(o.total);
+  let method = (o.payMethod && String(o.payMethod).replace('_chat', '')) || 'wechat';
+  const methods = [['wechat', 'WeChat Pay'], ['alipay', 'Alipay'], ['cash', 'Cash']];
+  const seg = el('div', { class: 'seg3', role: 'group', 'aria-label': 'Refund method' });
+  const drawSeg = () => seg.replaceChildren(...methods.map(([k, l]) => el('button', { type: 'button', id: 'rf-' + k, 'aria-pressed': method === k, onclick: () => { method = k; drawSeg(); } }, l)));
+  drawSeg();
+  // optional screenshot of the refund transfer (private: only you and the customer-side kitchen see it)
+  let blob = null, prev = '', keep = !!o.refundProof;
+  const box = el('div', { class: 'photo-edit' });
+  const status = el('div', { class: 'sub' });
+  async function drawShot() {
+    const src = blob ? prev : (keep && o.refundProof ? await receiptSrc(o.refundProof) : '');
+    box.replaceChildren(src ? el('img', { class: 'receipt-thumb', src, alt: '' }) : el('div', { class: 'ph', style: '--h:10', text: '↩' }),
+      el('div', { style: 'display:flex;flex-direction:column;gap:6px' },
+        el('label', { class: 'btn small', style: 'text-align:center' }, src ? 'Change screenshot' : 'Add screenshot',
+          el('input', { type: 'file', accept: 'image/*', id: 'rf-file', style: 'display:none', onchange: async e => {
+            const f = e.target.files && e.target.files[0]; if (!f) return;
+            status.textContent = 'Preparing picture…';
+            try { blob = await shrinkPhoto(f, 1600, false); if (prev) URL.revokeObjectURL(prev); prev = URL.createObjectURL(blob); keep = false; status.textContent = ''; drawShot(); }
+            catch (err) { status.textContent = ''; toast((err && err.message) || 'Could not read that picture.', true); }
+          } })),
+        src ? el('button', { class: 'link', type: 'button', onclick: () => { blob = null; keep = false; drawShot(); } }, 'Remove') : el('span', { class: 'sub', text: 'Optional' })));
+  }
+  drawShot();
+  openModal(el('div', { class: 'sheet' }, el('h2', { text: `Refund ${orderNo(o.no)}` }),
+    el('div', { class: 'sub', text: `Give ${money(amount)} back to ${whoName(o)}. This marks the order refunded and takes it out of your sales. Do the transfer in WeChat / Alipay yourself.` }),
+    el('div', { class: 'field' }, el('label', { text: 'Refunded by' }), seg),
+    el('div', { class: 'field' }, el('label', { text: 'Screenshot (optional)' }), box, status),
+    el('div', { class: 'actions' },
+      el('button', { class: 'btn', type: 'button', onclick: closeModal }, 'Back'),
+      el('button', { class: 'btn danger', type: 'button', id: 'rf-yes', onclick: async () => {
+        let proof = keep ? o.refundProof : '';
+        if (blob) { proof = `${o.clientId || S.uid}/refund-${newId()}.jpg`; try { await queuePhoto(proof, blob); } catch (_) { return toast('Could not store the picture on this device.', true); } }
+        const extra = o.refundProof && o.refundProof !== proof ? photoDelOp(o.refundProof) : [];
+        const ok = await write(Store.put('orders', Object.assign({}, o, { refunded: true, refundedAt: Date.now(), refundAmount: amount, refundMethod: method, refundProof: proof, refundTouched: true }), extra), 'Refunded');
+        if (ok) { closeModal(); if (after) setTimeout(after, 0); }
+      } }, `Refund ${money(amount)}`))));
 }
 /* Accept asks first */
 function acceptSheet(o0, after) {
@@ -806,7 +853,7 @@ function unreadFrom(clientId) { return clientId ? S.msgs.filter(m => m.client_id
 function ticket(o) {
   const sameDay = startOfDay(o.createdAt) === startOfDay(Date.now());
   const unread = unreadFrom(o.clientId);
-  return el('article', { class: 'ticket ' + (isCancelled(o) ? 't-cancelled' : o.paid ? 't-paid' : 't-unpaid'), 'data-id': o.id, tabindex: '0',
+  return el('article', { class: 'ticket ' + (isCancelled(o) ? 't-cancelled' : isRefunded(o) ? 't-refunded' : o.paid ? 't-paid' : 't-unpaid'), 'data-id': o.id, tabindex: '0',
     onclick: () => orderSheet(o), onkeydown: e => { if (e.key === 'Enter') orderSheet(o); } },
     el('div', { class: 't-head' },
       el('span', { class: 't-no', text: orderNo(o.no) }),
@@ -870,7 +917,7 @@ function orderSheet(o0) {
     !isCancelled(o) ? el('div', { class: 'stepper', role: 'group', 'aria-label': 'Progress (the client sees this)' }, steps.map(([k, l], i) =>
       el('button', { type: 'button', class: i < cur ? 'past' : i === cur ? 'now' : '', 'aria-pressed': i === cur, onclick: async () => { if (k === 'done') return deliveredModal(o); await setStatus(o, k); again(); } },
         el('span', { class: 'dot', text: i < cur ? '✓' : i + 1 }), el('span', { text: l })))) : el('div', { class: 'err', text: 'Cancelled' }),
-    el('div', { class: 'od-acts' }, orderActions(o, again)),
+    el('div', { class: 'od-acts' }, orderActions(o, again, true)),
     el('section', { class: 'od-sect od-who' },
       el('div', { class: 'who-head' }, whoAvatar(o, 'big'), el('div', { style: 'min-width:0' }, el('b', { text: whoName(o) }), whoPhone(o) ? el('div', { class: 'sub', text: whoPhone(o) }) : null,
         el('div', { class: 'login-tag', text: loginText(o) || (o.source === 'shop' ? 'Shop customer' : 'Order taken by you') }), acctBits(o, again))),
@@ -886,10 +933,15 @@ function orderSheet(o0) {
       el('div', { class: 'sum total' }, el('span', { text: 'Total' }), el('span', { text: money(o.total) })),
       o.note ? el('div', { class: 'note', text: o.note }) : null),
     pay, delivery,
+    isRefunded(o) ? el('section', { class: 'od-sect' }, el('h3', { text: 'Refund' }),
+      el('div', { class: 'od-row' }, el('span', {}, 'Refunded ' + money(o.refundAmount || o.total) + (o.refundMethod ? ' · ' + (PAY[o.refundMethod] || o.refundMethod) : '')), o.refundedAt ? el('span', { class: 'sub', text: dateShort(o.refundedAt) + ' ' + timeStr(o.refundedAt) }) : null),
+      o.refundProof ? privatePic(o.refundProof, 'Refund screenshot') : null,
+      el('div', { class: 'btns' }, confirmBtn('Undo refund', 'Undo the refund?', async () => { if (await write(Store.put('orders', Object.assign({}, o, { refunded: false, refundedAt: 0, refundAmount: 0, refundMethod: '', refundProof: '', refundTouched: true }), photoDelOp(o.refundProof)), 'Refund undone')) again(); }))) : null,
     el('section', { class: 'od-sect' }, el('h3', { text: 'Timeline' }),
       el('ol', { class: 'timeline' }, events.map(([l, t]) => el('li', {}, el('span', { text: l }), el('span', { class: 'sub', text: dateShort(t) + ' ' + timeStr(t) }))))),
     el('div', { class: 'actions' },
-      !isCancelled(o) && !isNew(o) && o.status !== 'accepted' && !isComplete(o) ? confirmBtn('Cancel order', 'Cancel it?', async () => { await setStatus(o, 'cancelled'); again(); }, 'danger left') : null,
+      !isCancelled(o) && !isRefunded(o) && !isNew(o) && o.status !== 'accepted' && !isComplete(o) ? confirmBtn('Cancel order', 'Cancel it?', async () => { await setStatus(o, 'cancelled'); again(); }, 'danger left') : null,
+      o.paid && !isRefunded(o) && !isCancelled(o) ? el('button', { class: 'btn danger', type: 'button', id: 'act-refund', onclick: () => refundSheet(o, again) }, 'Refund') : null,
       el('button', { class: 'btn', type: 'button', onclick: closeModal }, 'Close'))));
 }
 /* phone / email accounts: Verified status and password reset (needs internet) */
@@ -2006,7 +2058,7 @@ function statRows(mode) {
   const key = mode === 'months' ? (d => d.slice(0, 7)) : (d => d);
   const rows = new Map();
   const get = k => { if (!rows.has(k)) rows.set(k, { k, orders: 0, sales: 0, unpaid: 0, spent: 0 }); return rows.get(k); };
-  for (const o of S.orders) { if (isCancelled(o)) continue; const r = get(key(isoDay(o.createdAt))); r.orders++; r.sales += num(o.total); if (!o.paid) r.unpaid += num(o.total); }
+  for (const o of S.orders) { if (isCancelled(o) || isRefunded(o)) continue; const r = get(key(isoDay(o.createdAt))); r.orders++; r.sales += num(o.total); if (!o.paid) r.unpaid += num(o.total); }
   for (const p of S.purchases) { if (p.day) get(key(p.day)).spent += num(p.cost); }
   return rows;
 }
@@ -2273,6 +2325,52 @@ async function doRestore(data) {
 }
 
 /* ---------- settings ---------- */
+/* ---------- push notifications (Web Push; sent by the Supabase Edge Function) ---------- */
+const VAPID_PUBLIC = 'BFmR-lPWQuVIyHH2l_dTcdRB_AAHQt5H6K3Ugedb7bsCITdKEDsRflul1eTryILeOEZroa8QG9IIQ433bZ0j8GA';
+function b64ToU8(s) { const pad = '='.repeat((4 - s.length % 4) % 4); const b = (s + pad).replace(/-/g, '+').replace(/_/g, '/'); const raw = atob(b); return Uint8Array.from([...raw].map(c => c.charCodeAt(0))); }
+const Push = {
+  supported() { return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window && location.protocol !== 'file:'; },
+  async current() { if (!this.supported()) return null; try { const reg = await navigator.serviceWorker.ready; return await reg.pushManager.getSubscription(); } catch (_) { return null; } },
+  async enable() {
+    if (!this.supported()) throw new Error('This phone cannot do notifications here. On iPhone, add the app to your Home Screen and open it from there first.');
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') throw new Error(perm === 'denied' ? 'Notifications are blocked. Turn them on for this app in your phone settings.' : 'Notifications were not allowed.');
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToU8(VAPID_PUBLIC) });
+    const j = sub.toJSON();
+    const { error } = await sb.from('push_subscriptions').upsert({ endpoint: sub.endpoint, user_id: S.uid, p256dh: j.keys.p256dh, auth: j.keys.auth, ua: navigator.userAgent.slice(0, 200) });
+    if (error) throw error;
+    return sub;
+  },
+  async disable() {
+    const sub = await this.current();
+    if (sub) { try { await sb.from('push_subscriptions').delete().eq('endpoint', sub.endpoint); } catch (_) { /* ignore */ } try { await sub.unsubscribe(); } catch (_) { /* ignore */ } }
+  },
+};
+function pushSection() {
+  const box = el('div', { class: 'sect' }, el('h3', { text: 'Notifications' }));
+  const body = el('div'); box.append(body);
+  async function draw() {
+    if (!Push.supported()) {
+      body.replaceChildren(el('div', { class: 'sub', id: 'push-unsupported', text: 'Not available here. On iPhone: add Order Desk to your Home Screen (Share → Add to Home Screen), open it from there, then turn this on.' }));
+      return;
+    }
+    const perm = (window.Notification && Notification.permission) || 'default';
+    const sub = await Push.current();
+    const on = perm === 'granted' && !!sub;
+    body.replaceChildren(
+      el('label', { class: 'switch' }, el('input', { type: 'checkbox', id: 's-push', checked: on, onchange: async e => {
+        e.target.disabled = true;
+        try { if (e.target.checked) { await Push.enable(); toast('Notifications on'); } else { await Push.disable(); toast('Notifications off'); } }
+        catch (x) { toast((x && x.message) || 'Could not change notifications', true); }
+        draw();
+      } }), 'New orders, payments and messages'),
+      el('div', { class: 'sub', text: on ? 'This device will buzz even when the app is closed.' : perm === 'denied' ? 'Blocked. Turn notifications on for this app in your phone settings, then try again.' : 'Get told about new orders even when the app is shut.' }));
+  }
+  draw();
+  return box;
+}
 function settingsModal() {
   const s = clone(S.settings);
   const addrs = addrList().map(a => ({ id: a.id || newId(), name: a.name, fee: a.fee, feePizza: a.feePizza ?? '', was: a.name }));
@@ -2317,6 +2415,7 @@ function settingsModal() {
     el('div', { class: 'sect' }, el('h3', { text: 'Sound alerts' }),
       el('label', { class: 'switch' }, el('input', { type: 'checkbox', id: 's-sound', checked: Sound.on(), onchange: e => { Sound.set(e.target.checked); if (e.target.checked) Sound.play('order'); } }), 'Play a sound for new shop orders and payments'),
       el('div', { class: 'sub', text: 'On this device, while the app is open.' })),
+    pushSection(),
     el('div', { class: 'sect' }, el('h3', { text: 'Pickup' }),
       el('label', { class: 'switch' }, el('input', { type: 'checkbox', id: 's-pickup', checked: s.pickup !== false, onchange: e => { s.pickup = e.target.checked; } }), 'Pickup available'),
       el('div', { class: 'sub', text: 'Off: customers can only choose delivery, and Pickup disappears everywhere. Turn it on again any time.' })),

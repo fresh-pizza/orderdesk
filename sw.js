@@ -1,5 +1,5 @@
 /* Order Desk service worker: keeps the app itself on the device so it opens with no internet. */
-const VERSION = 'od-2.10.1';
+const VERSION = 'od-2.12.0';
 const SHELL = ['./', 'index.html', 'app.css', 'app.js', 'supabase.js', 'manifest.webmanifest',
   'icon-192.png', 'apple-touch-icon.png', 'pay-wechat.png', 'pay-alipay.png',
   'bricolage-grotesque-latin-600-normal.woff2', 'bricolage-grotesque-latin-700-normal.woff2',
@@ -51,5 +51,23 @@ self.addEventListener('fetch', e => {
       if (fallback && req.mode === 'navigate') return fallback;
       throw err;
     }
+  })());
+});
+
+/* ---------- push notifications ---------- */
+self.addEventListener('push', e => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch (_) { d = { title: 'Order Desk', body: e.data ? e.data.text() : '' }; }
+  const title = d.title || 'Order Desk';
+  const opts = { body: d.body || '', icon: 'icon-192.png', badge: 'icon-192.png', tag: d.tag || 'od-' + Date.now(), renotify: true, data: { url: d.url || './' } };
+  e.waitUntil(self.registration.showNotification(title, opts));
+});
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  const url = (e.notification.data && e.notification.data.url) || './';
+  e.waitUntil((async () => {
+    const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const c of all) { if ('focus' in c) { try { c.navigate && c.navigate(url); } catch (_) { /* ignore */ } return c.focus(); } }
+    if (self.clients.openWindow) return self.clients.openWindow(url);
   })());
 });
