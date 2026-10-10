@@ -9,9 +9,9 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   bucket: 'photos',
 };
-const VERSION = '2.12.2';
+const VERSION = '2.13.0';
 const COLLS = ['menu', 'customers', 'orders', 'settings', 'purchases'];
-const DEFAULT_SETTINGS = { id: 'main', name: 'My kitchen', currency: '¥', deliveryFee: 0, addresses: [], wechatQr: '', alipayQr: '', wechatId: '', alipayId: '', pickup: true, inventory: {} };
+const DEFAULT_SETTINGS = { id: 'main', name: 'My kitchen', currency: '¥', deliveryFee: 0, addresses: [], wechatQr: '', alipayQr: '', wechatId: '', alipayId: '', pickup: true, inventory: {}, logo: '' };
 
 /* ---------- tiny helpers ---------- */
 function el(tag, props, ...kids) {
@@ -212,7 +212,7 @@ const S = {
   ready: false, uid: null, email: '', signedIn: false,
   menu: [], customers: [], orders: [], purchases: [], settings: clone(DEFAULT_SETTINGS),
   loaded: { menu: true, customers: true, orders: true, config: true },
-  view: 'orders', statMode: 'days', statPick: null, ordFilter: 'open', ordLimit: 60, menuQ: '', menuCat: 'All', custQ: '', pickQ: '', pickCat: 'All',
+  view: 'orders', statMode: 'days', statPick: null, ordFilter: 'open', ordLimit: 60, ordFrom: '', ordTo: '', menuQ: '', menuCat: 'All', custQ: '', pickQ: '', pickCat: 'All',
   draft: null, blobUrls: new Map(), outbox: new Map(), svc: 'all', msgs: [], msgsOff: false, reviews: [], reviewsOff: false,
 };
 function refreshArrays(colls) {
@@ -226,7 +226,7 @@ const money = n => {
   const a = Math.abs(n);
   return (n < 0 ? '−' : '') + (S.settings.currency || '') + (Number.isInteger(a) ? a : a.toFixed(2));
 };
-const newDraft = () => ({ customerId: null, name: '', phone: '', address: '', type: 'delivery', note: '', lines: [] });
+const newDraft = () => ({ customerId: null, name: '', phone: '', address: '', type: 'delivery', note: '', lines: [], editId: null });
 const addrList = () => (Array.isArray(S.settings.addresses) ? S.settings.addresses : []);
 const addrFee = (name, pizza) => { const a = addrList().find(x => x.name === name); if (!a) return null; return pizza && a.feePizza !== '' && a.feePizza != null ? num(a.feePizza) : num(a.fee); };
 const draftPizza = () => S.draft.lines.some(l => (M.menu.get(l.menuId) || {}).kitchen === 'pizza');
@@ -305,14 +305,15 @@ const MAP = {
       r.payTouched ? { paid: !!r.paid, pay_method: r.payMethod || '', pay_proof: r.payProof || '', paid_at: r.paidAt ? toIso(r.paidAt) : null } : {},
       r.slotTouched ? { slot_date: r.slotDate || '', slot: r.slot || '' } : {},
       r.delTouched ? { delivery_proof: r.deliveryProof || '' } : {},
-      r.refundTouched ? { refunded: !!r.refunded, refunded_at: r.refundedAt ? toIso(r.refundedAt) : null, refund_amount: num(r.refundAmount), refund_method: r.refundMethod || '', refund_proof: r.refundProof || '' } : {}),
+      r.refundTouched ? { refunded: !!r.refunded, refunded_at: r.refundedAt ? toIso(r.refundedAt) : null, refund_amount: num(r.refundAmount), refund_method: r.refundMethod || '', refund_proof: r.refundProof || '' } : {},
+      r.editTouched ? { edited_at: r.editedAt ? toIso(r.editedAt) : null } : {}),
     from: x => ({ id: x.id, no: x.no, customerId: x.customer_id || null, customerName: x.customer_name, phone: x.phone, address: x.address, type: x.type, items: x.items || [], subtotal: num(x.subtotal), fee: num(x.fee), total: num(x.total), note: x.note, status: x.status, createdAt: toMs(x.created_at), deleted: !!x.deleted,
       paid: !!x.paid, payMethod: x.pay_method || '', payProof: x.pay_proof || '', paidAt: x.paid_at ? toMs(x.paid_at) : 0, payTouched: x.paid !== undefined,
       slotDate: x.slot_date || '', slot: x.slot || '', slotTouched: x.slot !== undefined,
       refunded: !!x.refunded, refundedAt: x.refunded_at ? toMs(x.refunded_at) : 0, refundAmount: num(x.refund_amount), refundMethod: x.refund_method || '', refundProof: x.refund_proof || '', refundTouched: x.refunded !== undefined,
       source: x.source || 'admin', paySubmittedAt: tsMs(x.pay_submitted_at), clientId: x.client_id || '',
       acceptedAt: tsMs(x.accepted_at), readyAt: tsMs(x.ready_at), doneAt: tsMs(x.done_at), deliveryProof: x.delivery_proof || '', delTouched: x.delivery_proof !== undefined,
-      clientLogin: x.client_login || '' }),
+      clientLogin: x.client_login || '', editedAt: tsMs(x.edited_at), editTouched: x.edited_at !== undefined }),
   },
   purchases: {
     to: r => Object.assign({ id: r.id, day: r.day || isoDay(Date.now()), item: r.item || '', qty: num(r.qty), unit: r.unit || '', cost: num(r.cost), note: r.note || '', photos: r.photos || [], created_at: toIso(r.createdAt), deleted: !!r.deleted },
@@ -325,11 +326,13 @@ const MAP = {
       r.addrTouched ? { addresses: r.addresses || [] } : {},
       r.payCfgTouched ? { pay_wechat_qr: r.wechatQr || '', pay_alipay_qr: r.alipayQr || '', pay_wechat_id: r.wechatId || '', pay_alipay_id: r.alipayId || '' } : {},
       r.pkTouched ? { pickup: r.pickup !== false } : {},
-      r.invTouched ? { inventory: r.inventory || {} } : {}),
+      r.invTouched ? { inventory: r.inventory || {} } : {},
+      r.logoTouched ? { logo: r.logo || '' } : {}),
     // one shared settings row for the whole team; older per-login rows are ignored
     from: x => ({ id: x.id === 'business' ? 'main' : '__other', name: x.name, currency: x.currency, deliveryFee: num(x.delivery_fee), addresses: Array.isArray(x.addresses) ? x.addresses : [], addrTouched: x.addresses !== undefined,
       wechatQr: x.pay_wechat_qr || '', alipayQr: x.pay_alipay_qr || '', wechatId: x.pay_wechat_id || '', alipayId: x.pay_alipay_id || '', payCfgTouched: x.pay_wechat_qr !== undefined,
-      pickup: x.pickup !== false, pkTouched: x.pickup !== undefined, inventory: x.inventory && typeof x.inventory === 'object' ? x.inventory : {}, invTouched: x.inventory !== undefined, deleted: false }),
+      pickup: x.pickup !== false, pkTouched: x.pickup !== undefined, inventory: x.inventory && typeof x.inventory === 'object' ? x.inventory : {}, invTouched: x.inventory !== undefined,
+      logo: x.logo || '', logoTouched: x.logo !== undefined, deleted: false }),
   },
 };
 
@@ -680,9 +683,20 @@ function viewOrders(root) {
   if (!filters.some(([k]) => k === S.ordFilter)) S.ordFilter = 'open';
   const chips = el('div', { class: 'chips' }, filters.map(([k, label]) =>
     el('button', { class: 'chip', type: 'button', 'aria-pressed': S.ordFilter === k, onclick: () => { S.ordFilter = k; S.ordLimit = 60; render(true); } }, label)));
-  root.append(el('div', { class: 'ord-sticky' }, head, seg, chips));
+  const setRange = (from, to) => { S.ordFrom = from; S.ordTo = to; S.ordLimit = 60; render(true); };
+  const dateRow = el('div', { style: 'display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin:10px 16px 0' },
+    el('div', { class: 'field', style: 'margin:0' }, el('label', { for: 'ord-from', text: 'From' }),
+      el('input', { type: 'date', id: 'ord-from', value: S.ordFrom, onchange: e => setRange(e.target.value, S.ordTo) })),
+    el('div', { class: 'field', style: 'margin:0' }, el('label', { for: 'ord-to', text: 'To' }),
+      el('input', { type: 'date', id: 'ord-to', value: S.ordTo, onchange: e => setRange(S.ordFrom, e.target.value) })),
+    el('button', { class: 'btn small', type: 'button', onclick: () => setRange(isoDay(Date.now()), isoDay(Date.now())) }, 'Today'),
+    el('button', { class: 'btn small', type: 'button', onclick: () => setRange(isoDay(Date.now() - DAY), isoDay(Date.now() - DAY)) }, 'Yesterday'),
+    el('button', { class: 'btn small', type: 'button', onclick: () => setRange(isoDay(Date.now() - 6 * DAY), isoDay(Date.now())) }, 'Last 7 days'),
+    (S.ordFrom || S.ordTo) ? el('button', { class: 'link', type: 'button', onclick: () => setRange('', '') }, 'Clear dates') : null);
+  root.append(el('div', { class: 'ord-sticky' }, head, seg, chips), dateRow);
   const keep0 = { all: () => true, open: isOpenOrder, paid: o => !isCancelled(o) && !isRefunded(o) && o.paid, unpaid: isUnpaid, done: isDone, cancelled: isCancelled, refunded: isRefunded }[S.ordFilter];
-  const keep = o => keep0(o) && inSvc(o);
+  const inRange = o => { if (!S.ordFrom && !S.ordTo) return true; const d = isoDay(o.createdAt); return (!S.ordFrom || d >= S.ordFrom) && (!S.ordTo || d <= S.ordTo); };
+  const keep = o => keep0(o) && inSvc(o) && inRange(o);
   const list = S.orders.filter(keep).sort((a, b) => b.createdAt - a.createdAt);
   if (!list.length) {
     root.append(el('div', { class: 'empty' }, el('b', { text: S.orders.length ? 'Nothing here' : 'No orders yet' }),
@@ -862,6 +876,7 @@ function ticket(o) {
       el('span', { class: 't-time', text: timeStr(o.createdAt) + (sameDay ? '' : ' · ' + dateShort(o.createdAt)) }),
       hasNight() ? el('span', { class: 'tag svc ' + orderSvc(o), text: orderSvc(o) === 'night' ? '🌙' : '☀', title: SVC[orderSvc(o)] }) : null,
       o.source === 'shop' ? el('span', { class: 'tag shop', text: 'Shop' }) : null,
+      o.editedAt ? el('span', { class: 'tag', title: 'Edited', text: '✎' }) : null,
       pickupOn() || o.type === 'pickup' ? el('span', { class: 'tag', text: o.type === 'delivery' ? 'Delivery' : 'Pickup' }) : null,
       unread ? el('span', { class: 'tag msg', text: '💬 ' + unread }) : null,
       payPill(o)),
@@ -895,7 +910,7 @@ function orderSheet(o0) {
   const steps = [['new', 'Received'], ['accepted', 'Accepted'], ['ready', readyLabel(o)], ['done', doneLabel(o)]];
   const at = steps.findIndex(([k]) => k === o.status), cur = at < 0 ? 0 : at;
   const events = [['Placed', o.createdAt], ['Payment sent by client', o.paySubmittedAt], ['Accepted', o.acceptedAt], ['Paid', o.paid ? o.paidAt : 0],
-    [readyLabel(o), o.readyAt], [doneLabel(o), o.doneAt]].filter(([, t]) => t).sort((a, b) => a[1] - b[1]);
+    [readyLabel(o), o.readyAt], [doneLabel(o), o.doneAt], ['Edited', o.editedAt]].filter(([, t]) => t).sort((a, b) => a[1] - b[1]);
   const unread = unreadFrom(o.clientId);
   const pay = isCancelled(o) ? null : el('section', { class: 'od-sect' }, el('h3', { text: 'Payment' }),
     o.paid ? el('div', { class: 'od-row' }, el('span', {}, 'Paid with ', payLogo(o.payMethod), PAY[o.payMethod] || 'unknown'), o.paidAt ? el('span', { class: 'sub', text: dateShort(o.paidAt) + ' ' + timeStr(o.paidAt) }) : null)
@@ -914,7 +929,8 @@ function orderSheet(o0) {
     el('div', { class: 'btns' }, el('button', { class: 'btn small', type: 'button', onclick: () => deliveredModal(o) }, o.deliveryProof ? 'Change photo' : 'Add photo'))) : null;
   openModal(el('div', { class: 'sheet od' },
     el('div', { class: 'od-head' }, el('h2', { text: `Order ${orderNo(o.no)}` }),
-      hasNight() ? el('span', { class: 'tag svc ' + orderSvc(o), text: SVC[orderSvc(o)] }) : null, payPill(o)),
+      hasNight() ? el('span', { class: 'tag svc ' + orderSvc(o), text: SVC[orderSvc(o)] }) : null,
+      o.editedAt ? el('span', { class: 'tag', title: 'Edited ' + dateShort(o.editedAt) + ' ' + timeStr(o.editedAt), text: '✎ Edited' }) : null, payPill(o)),
     el('div', { class: 'sub', text: `${o.source === 'shop' ? 'Ordered in the shop' : 'Taken by you'} · ${dateShort(o.createdAt)} ${timeStr(o.createdAt)}${pickupOn() || o.type === 'pickup' ? ' · ' + (o.type === 'delivery' ? 'Delivery' : 'Pickup') : ''}` }),
     !isCancelled(o) ? el('div', { class: 'stepper', role: 'group', 'aria-label': 'Progress (the client sees this)' }, steps.map(([k, l], i) =>
       el('button', { type: 'button', class: i < cur ? 'past' : i === cur ? 'now' : '', 'aria-pressed': i === cur, onclick: async () => { if (k === 'done') return deliveredModal(o); await setStatus(o, k); again(); } },
@@ -942,6 +958,7 @@ function orderSheet(o0) {
     el('section', { class: 'od-sect' }, el('h3', { text: 'Timeline' }),
       el('ol', { class: 'timeline' }, events.map(([l, t]) => el('li', {}, el('span', { text: l }), el('span', { class: 'sub', text: dateShort(t) + ' ' + timeStr(t) }))))),
     el('div', { class: 'actions' },
+      !isCancelled(o) ? el('button', { class: 'btn small', type: 'button', onclick: () => editOrder(o) }, '✎ Edit order') : null,
       !isCancelled(o) && !isRefunded(o) && !isNew(o) && o.status !== 'accepted' && !isComplete(o) ? confirmBtn('Cancel order', 'Cancel it?', async () => { await setStatus(o, 'cancelled'); again(); }, 'danger left') : null,
       o.paid && !isRefunded(o) && !isCancelled(o) ? el('button', { class: 'btn danger', type: 'button', id: 'act-refund', onclick: () => refundSheet(o, again) }, 'Refund') : null,
       el('button', { class: 'btn', type: 'button', onclick: closeModal }, 'Close'))));
@@ -1096,8 +1113,10 @@ function viewNew(root) {
   N.grid = el('div', { class: 'grid' }); N.chips = el('div', { class: 'chips' });
   N.basket = el('div', { class: 'card basket', id: 'basket' });
   N.when = el('div', { class: 'when-pick' });
+  const editing = !!d.editId, editOrig = editing ? S.orders.find(x => x.id === d.editId) : null;
   N.root = el('div', {},
-    pageHead('New order', 'Pick a customer, add items, save.'),
+    pageHead(editing ? `Edit order ${orderNo(editOrig ? editOrig.no : 0)}` : 'New order',
+      editing ? 'Change what you need — everything else stays the same.' : 'Pick a customer, add items, save.'),
     el('div', { class: 'neworder' },
       el('div', { class: 'stack' },
         el('div', { class: 'card' }, el('h2', { text: 'Customer' }),
@@ -1209,8 +1228,10 @@ function refreshBasket() {
     el('div', { class: 'field', style: 'margin:10px 0' }, el('label', { for: 'o-note', text: 'Note for the kitchen' }),
       el('textarea', { id: 'o-note', value: d.note, placeholder: 'Less spicy, extra raita…', oninput: e => { d.note = e.target.value; } })),
     el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' },
-      el('button', { class: 'btn primary', id: 'b-save', type: 'button', disabled: !d.lines.length, onclick: saveOrder }, 'Save order'),
-      el('button', { class: 'btn', type: 'button', onclick: () => { S.draft = newDraft(); $('#main').replaceChildren(); viewNew($('#main')); } }, 'Clear')));
+      el('button', { class: 'btn primary', id: 'b-save', type: 'button', disabled: !d.lines.length, onclick: saveOrder }, d.editId ? 'Save changes' : 'Save order'),
+      d.editId
+        ? el('button', { class: 'btn', type: 'button', onclick: () => { S.draft = newDraft(); go('orders'); } }, 'Cancel')
+        : el('button', { class: 'btn', type: 'button', onclick: () => { S.draft = newDraft(); $('#main').replaceChildren(); viewNew($('#main')); } }, 'Clear')));
   drawWhen();
 }
 /* time windows: a dish may list the windows it is served in; the order offers the windows all its dishes share */
@@ -1257,16 +1278,47 @@ async function saveOrder() {
     const c = S.customers.find(x => x.id === cid);
     if (c && addr && c.address !== addr) await write(Store.patch('customers', cid, { address: addr }));
   }
-  const t = totals(), no = nextNo();
+  const t = totals();
+  const items = d.lines.map(l => { const m = M.menu.get(l.menuId) || {}; return { menuId: l.menuId, name: l.name, variant: l.variant, price: l.price, qty: l.qty, kitchen: m.kitchen === 'pizza' ? 'pizza' : 'other', ing: clone(m.ingredients || []) }; });
+
+  if (d.editId) {
+    // editing: start from the order exactly as it is, and only change what the form controls —
+    // status, payment, delivery proof, refund, timestamps and everything else carry over untouched
+    const orig = S.orders.find(x => x.id === d.editId);
+    if (!orig) { btn.disabled = false; toast('That order no longer exists.', true); S.draft = newDraft(); go('orders'); return; }
+    const patched = Object.assign({}, orig, {
+      customerId: cid || null, customerName: name || 'Walk-in', phone, address: addr, type: d.type,
+      items, subtotal: t.sub, fee: t.fee, total: t.total, note: d.note.trim(),
+      slotDate: d.slotDate, slot: d.slot || '', slotTouched: true,
+      editedAt: now, editTouched: true,
+    });
+    if (await write(Store.put('orders', patched), `Order ${orderNo(orig.no)} updated`)) {
+      S.draft = newDraft(); go('orders');
+    } else btn.disabled = false;
+    return;
+  }
+
+  const no = nextNo();
   const order = {
     id: newId(), no, customerId: cid || null, customerName: name || 'Walk-in', phone, address: addr, type: d.type,
-    items: d.lines.map(l => { const m = M.menu.get(l.menuId) || {}; return { menuId: l.menuId, name: l.name, variant: l.variant, price: l.price, qty: l.qty, kitchen: m.kitchen === 'pizza' ? 'pizza' : 'other', ing: clone(m.ingredients || []) }; }),
-    subtotal: t.sub, fee: t.fee, total: t.total, note: d.note.trim(), status: 'accepted', createdAt: now,
+    items, subtotal: t.sub, fee: t.fee, total: t.total, note: d.note.trim(), status: 'accepted', createdAt: now,
   };
   if (d.slot || (d.slotDate && d.slotDate !== isoDay(now))) Object.assign(order, { slotDate: d.slotDate, slot: d.slot || '', slotTouched: true });
   if (await write(Store.put('orders', order), `Order ${orderNo(no)} saved`)) {
     S.draft = newDraft(); S.ordFilter = 'open'; go('orders');
   } else btn.disabled = false;
+}
+/* open an existing order in the New-order form, pre-filled, to change it. Only the fields the
+   form controls change on save (customer, items, type, address, note, time) — status, payment,
+   delivery proof and refund stay exactly as they were. */
+function editOrder(o) {
+  const lines = (o.items || []).map(it => ({ menuId: it.menuId, name: it.name || '', variant: it.variant || '', price: num(it.price), qty: Math.max(1, num(it.qty) || 1) }));
+  S.draft = Object.assign(newDraft(), {
+    editId: o.id, customerId: o.customerId || null,
+    name: o.customerName && o.customerName !== 'Walk-in' ? o.customerName : '', phone: o.phone || '', address: o.address || '',
+    type: o.type || 'delivery', note: o.note || '', slotDate: o.slotDate || isoDay(o.createdAt), slot: o.slot || '', lines,
+  });
+  closeModal(); go('new');
 }
 
 /* ---------- MENU ---------- */
@@ -2407,10 +2459,29 @@ function settingsModal() {
         el('input', { id: 's-' + idKey, value: s[idKey] || '', placeholder: idHint, autocomplete: 'off', oninput: e => { s[idKey] = e.target.value; payChanged = true; } })));
   };
   const f = (id, label, key, attrs) => el('div', { class: 'field' }, el('label', { for: id, text: label }), el('input', Object.assign({ id, value: s[key], oninput: e => { s[key] = e.target.value; } }, attrs)));
+  // logo: shown top-left in the shop app in place of the business name
+  const logo = { path: s.logo || '', blob: null, prev: '' };
+  let logoChanged = false;
+  const logoBox = el('div', { class: 'qr-edit' });
+  const drawLogo = () => {
+    const src = logo.blob ? logo.prev : (logo.path ? photoUrl(logo.path) : '');
+    logoBox.replaceChildren(src ? el('img', { class: 'qr-thumb', src, alt: 'Business logo' }) : el('div', { class: 'qr-thumb empty', text: 'No logo' }),
+      el('div', { style: 'display:flex;flex-direction:column;gap:6px;align-items:flex-start' },
+        el('label', { class: 'btn small' }, src ? 'Change logo' : 'Upload logo',
+          el('input', { type: 'file', accept: 'image/*', id: 's-logo', style: 'display:none', onchange: async e => {
+            const file = e.target.files && e.target.files[0]; if (!file) return;
+            try { logo.blob = await shrinkPhoto(file, 400, true); if (logo.prev) URL.revokeObjectURL(logo.prev); logo.prev = URL.createObjectURL(logo.blob); logoChanged = true; drawLogo(); }
+            catch (err) { toast((err && err.message) || 'Could not read that picture.', true); }
+          } })),
+        src ? el('button', { class: 'link', type: 'button', onclick: () => { logo.blob = null; logo.path = ''; logoChanged = true; drawLogo(); } }, 'Remove') : null));
+  };
+  drawLogo();
   const n = Sync.waiting();
   openModal(el('div', { class: 'sheet' }, el('h2', { text: 'Settings' }),
     f('s-name', 'Business name', 'name'),
     f('s-cur', 'Currency symbol', 'currency', { maxlength: '4' }),
+    el('div', { class: 'sect' }, el('h3', { text: 'Logo' }),
+      el('div', { class: 'sub', text: 'Shown top-left in the shop app, in place of the business name.' }), logoBox),
     el('div', { class: 'sect' }, el('h3', { text: 'Delivery addresses' }),
       el('div', { class: 'sub', text: 'Only these can be picked for a delivery. 🍛 = fee for other dishes, 🍕 = fee when the order has pizza (empty = same). 0 = free.' }),
       abox, el('button', { class: 'link', type: 'button', style: 'align-self:flex-start', onclick: () => { addrs.push({ id: newId(), name: '', fee: '', was: '' }); drawAddrs(); const ins = abox.querySelectorAll('.addr-row input:not([type=number])'); if (ins.length) ins[ins.length - 1].focus(); } }, '+ Add address')),
@@ -2436,7 +2507,8 @@ function settingsModal() {
           wechatQr: qr.wechat.path, alipayQr: qr.alipay.path, wechatId: (s.wechatId || '').trim(), alipayId: (s.alipayId || '').trim(),
           payCfgTouched: !!(S.settings.payCfgTouched || payChanged),
           pickup: s.pickup !== false, pkTouched: !!(S.settings.pkTouched || (s.pickup === false) !== (S.settings.pickup === false)),
-          inventory: S.settings.inventory || {}, invTouched: !!S.settings.invTouched };
+          inventory: S.settings.inventory || {}, invTouched: !!S.settings.invTouched,
+          logo: logo.path, logoTouched: !!(S.settings.logoTouched || logoChanged) };
         const extra = [];
         for (const k of ['wechat', 'alipay']) {
           const q = qr[k], old = S.settings[k + 'Qr'] || '';
@@ -2447,6 +2519,12 @@ function settingsModal() {
           }
           if (old && old !== rec[k + 'Qr']) extra.push(...photoDelOp(old));
         }
+        if (logo.blob) {
+          const path = `${S.uid}/logo-${newId()}.jpg`;
+          try { await queuePhoto(path, logo.blob); } catch (_) { return toast('Could not store the logo picture on this device.', true); }
+          rec.logo = path;
+        }
+        if ((S.settings.logo || '') && (S.settings.logo || '') !== rec.logo) extra.push(...photoDelOp(S.settings.logo));
         if (!await write(Store.put('settings', rec, extra), 'Settings saved')) return;
         // a renamed address follows the customers who use it
         for (const a of clean) if (a.was && a.was !== a.name) for (const c of S.customers.filter(x => x.address === a.was)) await Store.patch('customers', c.id, { address: a.name });

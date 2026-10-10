@@ -11,7 +11,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   phoneDomain: 'phone.orderdesk.app', // phone logins are stored as <digits>@this, no SMS involved
 };
-const SHOP_VERSION = '2.3.3';
+const SHOP_VERSION = '2.3.4';
 /* phones (WeChat especially) keep old copies of web pages; if a newer shop is online, reload it */
 (async function freshness() {
   try {
@@ -165,11 +165,12 @@ const Sound = (() => {
 
 /* ---------- state ---------- */
 const S = {
-  biz: { name: '', currency: '¥', addresses: [], pay: {} }, menu: [], cat: 'All', view: 'menu',
+  biz: { name: '', currency: '¥', addresses: [], pay: {}, logo: '' }, menu: [], cat: 'All', view: 'menu',
   basket: store.get('basket', []), // [{menuId, variant, qty}]
   draft: Object.assign({ type: 'delivery', address: '', slotDate: '', slot: '', note: '', name: '', phone: '' }, store.get('draft', {})),
   session: null, orders: [], lastOrder: null, loaded: false, loadErr: '',
   msgs: [], msgsOff: false, chatAbout: null, reviews: [], reviewsOff: false, sales: new Map(),
+  updateReady: false,
 };
 const money = n => { n = Number(n) || 0; const a = Math.abs(n); return (n < 0 ? '−' : '') + (S.biz.currency || '') + (Number.isInteger(a) ? a : a.toFixed(2)); };
 const feeText = f => (f ? money(f) : 'Free');
@@ -245,7 +246,9 @@ function renderTop() {
   $('#top').replaceChildren(...(sub ? [
     el('button', { class: 'back', type: 'button', id: 'top-back', 'aria-label': 'Back', onclick: () => go(sub[1]) }, '‹'),
     el('div', { class: 'top-title', id: 'top-title', text: sub[0] })]
-    : [el('button', { class: 'biz', type: 'button', onclick: () => go('menu') }, S.biz.name || 'Order food')]));
+    : [el('button', { class: 'biz' + (S.biz.logo ? ' has-logo' : ''), type: 'button', onclick: () => go('menu') },
+        S.biz.logo ? el('img', { class: 'biz-logo', src: publicUrl(S.biz.logo), alt: S.biz.name || 'Order food' }) : null,
+        S.biz.logo ? null : (S.biz.name || 'Order food'))]));
   document.title = S.biz.name ? `${S.biz.name} · Order` : 'Order food';
   const tabOf = { menu: 'menu', checkout: 'menu', details: 'menu', done: 'orders', orders: 'orders', me: 'me', chat: 'chat' }[S.view] || 'menu';
   const badge = { orders: activeOrders().length, chat: unreadMsgs() };
@@ -333,7 +336,14 @@ function render() {
   renderTop();
   const main = $('#main');
   main.replaceChildren();
-  if (!S.loaded) { main.append(el('div', { class: 'splash', text: S.loadErr || 'Loading the menu…' })); renderBar(); return; }
+  if (S.updateReady) main.append(el('div', { class: 'banner' }, el('span', { text: 'A new version is ready.' }),
+    el('button', { class: 'btn small primary', type: 'button', onclick: applyUpdate }, 'Update now')));
+  if (!S.loaded) {
+    main.append(el('div', { class: 'splash' }, el('div', { style: 'display:flex;flex-direction:column;align-items:center;gap:14px;text-align:center;padding:0 24px' },
+      el('div', { text: S.loadErr || 'Loading the menu…' }),
+      S.loadErr ? el('button', { class: 'btn primary', type: 'button', onclick: () => loadShop() }, 'Reload') : null)));
+    renderBar(); return;
+  }
   ({ menu: viewMenu, checkout: viewCheckout, details: viewDetails, orders: viewOrders, done: viewDone, me: viewMe, chat: viewChat })[S.view](main);
   renderBar();
 }
@@ -1193,24 +1203,55 @@ function listen() {
 }
 
 /* ---------- start ---------- */
+// a stalled connection (common reaching the server from here) must not hang forever with
+// no feedback — give it a time limit so a bad connection fails visibly instead of leaving
+// the splash stuck on "Loading the menu…" with nothing the customer can do about it
+function withTimeout(promise, ms) {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error('timeout')), ms);
+    promise.then(v => { clearTimeout(t); resolve(v); }, e => { clearTimeout(t); reject(e); });
+  });
+}
 async function loadShop() {
+  S.loadErr = ''; if (!S.loaded) render(); // show "Loading the menu…" right away on a manual retry too
   try {
-    const [st, mn] = await Promise.all([
+    const [st, mn] = await withTimeout(Promise.all([
       sb.from('settings').select('*').eq('id', 'business'),
-      sb.from('menu').select('*').eq('deleted', false)]);
+      sb.from('menu').select('*').eq('deleted', false)]), 15000);
     if (st.error) throw st.error; if (mn.error) throw mn.error;
     const b = (st.data || [])[0] || {};
     S.biz = { name: b.name || '', currency: b.currency ?? '¥', addresses: Array.isArray(b.addresses) ? b.addresses : [],
-      pay: { wechatQr: b.pay_wechat_qr || '', alipayQr: b.pay_alipay_qr || '', wechatId: b.pay_wechat_id || '', alipayId: b.pay_alipay_id || '' }, pickup: b.pickup !== false };
+      pay: { wechatQr: b.pay_wechat_qr || '', alipayQr: b.pay_alipay_qr || '', wechatId: b.pay_wechat_id || '', alipayId: b.pay_alipay_id || '' }, pickup: b.pickup !== false, logo: b.logo || '' };
     S.menu = mn.data || [];
-    await Promise.all([loadReviews(), loadSales()]);
     S.basket = S.basket.filter(l => dish(l.menuId));
     S.loaded = true; S.loadErr = '';
-  } catch (e) { S.loadErr = niceErr(e) + ' Pull down to reload.'; }
-  render();
+    render();
+    // ratings and "sold" badges aren't needed to show the menu itself; fetch them after,
+    // so a slow connection doesn't make the customer wait twice before seeing anything
+    Promise.all([loadReviews(), loadSales()]).then(() => { if (S.loaded) render(); });
+  } catch (e) {
+    S.loadErr = (/timeout/.test((e && e.message) || '') ? 'Taking too long to reach the server.' : niceErr(e));
+    render();
+  }
+}
+let waitingSW = null, swUpdating = false;
+function applyUpdate() { swUpdating = true; if (waitingSW) waitingSW.postMessage('skip-waiting'); else location.reload(); }
+function setupSW() {
+  if (!('serviceWorker' in navigator) || location.protocol === 'file:') return;
+  navigator.serviceWorker.register('sw.js').then(reg => {
+    const watch = w => w && w.addEventListener('statechange', () => {
+      if (w.state === 'installed' && navigator.serviceWorker.controller) { waitingSW = w; S.updateReady = true; render(); }
+    });
+    if (reg.waiting && navigator.serviceWorker.controller) { waitingSW = reg.waiting; S.updateReady = true; }
+    reg.addEventListener('updatefound', () => watch(reg.installing));
+    setInterval(() => reg.update().catch(() => {}), 3600000);
+  }).catch(() => { /* offline install not possible here */ });
+  let reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (swUpdating && !reloading) { reloading = true; location.reload(); } });
 }
 async function boot() {
   render();
+  setupSW();
   if (!sb) { S.loadErr = 'Could not start. Check your internet and reload.'; render(); return; }
   await loadShop();
   try { const r = await sb.auth.getSession(); if (r && r.data && r.data.session) { if (await checkAccountAlive(r.data.session)) { await onSession(r.data.session); render(); } } } catch (_) { /* signed out */ }
