@@ -11,7 +11,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   phoneDomain: 'phone.orderdesk.app', // phone logins are stored as <digits>@this, no SMS involved
 };
-const SHOP_VERSION = '2.3.2';
+const SHOP_VERSION = '2.3.3';
 /* phones (WeChat especially) keep old copies of web pages; if a newer shop is online, reload it */
 (async function freshness() {
   try {
@@ -289,6 +289,22 @@ async function removedSignOut() {
   toast('Your account was removed. Please sign in again.', true);
 }
 async function signOutShop() { await sb.auth.signOut({ scope: 'local' }); forgetPerson(); render(); toast('Signed out'); }
+
+/* best-effort nudge to the kitchen's phone: a new order, a payment claim, or a new message.
+   Calls the notify function directly as the customer, instead of waiting on a database webhook
+   (Supabase's Database Webhooks are broken on this project; this is the workaround).
+   Never blocks the UI and never surfaces an error to the customer — a missed push is not their problem. */
+async function notifyAdmin(type, table, record, old_record) {
+  try {
+    const token = S.session && S.session.access_token;
+    if (!token) return;
+    await fetch(CFG.url + '/functions/v1/notify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+      body: JSON.stringify({ type, table, record, old_record: old_record || null }),
+    });
+  } catch (_) { /* notifications are a nice-to-have */ }
+}
 function viewMe(root) {
   const me = whoAmI();
   root.append(el('h1', { class: 'page-h', text: 'Me' }));
@@ -738,6 +754,7 @@ async function placeNow(err) {
     S.orders = [data, ...S.orders.filter(o => o.id !== data.id)];
     if (!S.profile) S.profile = { name: data.customer_name, notes: 'Signed up in the shop' }; else S.profile.name = data.customer_name;
     lastStatus.set(data.id, data.status);
+    notifyAdmin('INSERT', 'orders', data, null);
     Sound.play('placed');
     go('done');
     payModal(data, true); // two buttons: Pay later, Pay now (opens the payment options)
@@ -1004,6 +1021,7 @@ function payModal(o, fresh) {
             }
             const { error } = await sb.rpc('submit_payment', { order_id: o.id, proof: path, method: way });
             if (error) throw error;
+            notifyAdmin('UPDATE', 'orders', { ...o, pay_submitted_at: Date.now(), pay_method: way, paid: false }, o);
             closeModal(); toast(path ? 'Screenshot sent. Thank you!' : 'Thank you! We will confirm your payment.'); await loadOrders();
             if (S.lastOrder && S.lastOrder.id === o.id) S.lastOrder = S.orders.find(x => x.id === o.id) || S.lastOrder;
             render();
@@ -1153,6 +1171,7 @@ function viewChat(root) {
     try {
       const { data, error } = await sb.from('messages').insert({ client_id: S.session.user.id, body, order_no: S.chatAbout }).select().single();
       if (error) throw error;
+      notifyAdmin('INSERT', 'messages', data, null);
       S.msgs.push(data); input.value = ''; S.chatAbout = null; drawAbout(); drawChat();
     } catch (x) { toast(niceErr(x), true); }
     btn.disabled = false;
