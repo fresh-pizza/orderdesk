@@ -9,7 +9,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   bucket: 'photos',
 };
-const VERSION = '2.15.0';
+const VERSION = '2.15.1';
 const COLLS = ['menu', 'customers', 'orders', 'settings', 'purchases'];
 const DEFAULT_SETTINGS = { id: 'main', name: 'My kitchen', currency: '¥', deliveryFee: 0, addresses: [], wechatQr: '', alipayQr: '', wechatId: '', alipayId: '', pickup: true, inventory: {}, logo: '' };
 
@@ -761,22 +761,23 @@ function viewOrders(root) {
   /* every chip below is scoped to whichever Day/Night segment is active above it; 'all' sees everything, as before */
   const inSvc = o => S.svc === 'all' || orderSvc(o) === S.svc;
   const isDone = isComplete;
-  const paidN = S.orders.filter(o => inSvc(o) && !isCancelled(o) && !isRefunded(o) && o.paid).length;
-  const unpaidN = S.orders.filter(o => inSvc(o) && isUnpaid(o)).length;
-  const cancN = S.orders.filter(o => inSvc(o) && isCancelled(o)).length;
-  const doneN = S.orders.filter(o => inSvc(o) && isDone(o)).length;
-  const openN = S.orders.filter(o => inSvc(o) && isOpenOrder(o)).length;
-  const refN = S.orders.filter(o => inSvc(o) && isRefunded(o)).length;
+/* no date chosen = today's business day (what the header shows); Open still lists every open order, so an unaccepted one from yesterday is never hidden.
+     asOpen = true when counting/listing the Open chip */
+  const todayBiz = bizDay(Date.now());
+  const inRange = (o, asOpen) => { if (S.ordAll) return true; if (!S.ordFrom && !S.ordTo) return asOpen || orderDay(o) === todayBiz; const d = orderDay(o); return (!S.ordFrom || d >= S.ordFrom) && (!S.ordTo || d <= S.ordTo); };
+  const paidN = S.orders.filter(o => inSvc(o) && inRange(o, false) && !isCancelled(o) && !isRefunded(o) && o.paid).length;
+  const unpaidN = S.orders.filter(o => inSvc(o) && inRange(o, false) && isUnpaid(o)).length;
+  const cancN = S.orders.filter(o => inSvc(o) && inRange(o, false) && isCancelled(o)).length;
+  const doneN = S.orders.filter(o => inSvc(o) && inRange(o, false) && isDone(o)).length;
+  const openN = S.orders.filter(o => inSvc(o) && inRange(o, true) && isOpenOrder(o)).length;
+  const refN = S.orders.filter(o => inSvc(o) && inRange(o, false) && isRefunded(o)).length;
   const filters = [['all', 'All'], ['open', `Open (${openN})`], ['paid', `Paid (${paidN})`], ['unpaid', `Unpaid (${unpaidN})`], ['done', `Completed (${doneN})`], ['cancelled', `Cancelled (${cancN})`], ['refunded', `Refunded (${refN})`]];
   if (!filters.some(([k]) => k === S.ordFilter)) S.ordFilter = 'open';
   const chips = el('div', { class: 'chips' }, filters.map(([k, label]) =>
     el('button', { class: 'chip', type: 'button', 'aria-pressed': S.ordFilter === k, onclick: () => { S.ordFilter = k; S.ordLimit = 60; render(true); } }, label)));
   root.append(el('div', { class: 'ord-sticky' }, head, seg, chips, S.calOpen ? calendarPop() : null));
   const keep0 = { all: () => true, open: isOpenOrder, paid: o => !isCancelled(o) && !isRefunded(o) && o.paid, unpaid: isUnpaid, done: isDone, cancelled: isCancelled, refunded: isRefunded }[S.ordFilter];
-  /* no date chosen = today's business day (what the header shows); Open still lists every open order, so an unaccepted one from yesterday is never hidden */
-  const todayBiz = bizDay(Date.now());
-  const inRange = o => { if (S.ordAll) return true; if (!S.ordFrom && !S.ordTo) return S.ordFilter === 'open' || orderDay(o) === todayBiz; const d = orderDay(o); return (!S.ordFrom || d >= S.ordFrom) && (!S.ordTo || d <= S.ordTo); };
-  const keep = o => keep0(o) && inSvc(o) && inRange(o);
+    const keep = o => keep0(o) && inSvc(o) && inRange(o, S.ordFilter === 'open');
   const list = S.orders.filter(keep).sort((a, b) => b.createdAt - a.createdAt);
   if (!list.length) {
     root.append(el('div', { class: 'empty' }, el('b', { text: S.orders.length ? 'Nothing here' : 'No orders yet' }),
