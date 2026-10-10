@@ -9,7 +9,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   bucket: 'photos',
 };
-const VERSION = '2.10.0';
+const VERSION = '2.10.1';
 const COLLS = ['menu', 'customers', 'orders', 'settings', 'purchases'];
 const DEFAULT_SETTINGS = { id: 'main', name: 'My kitchen', currency: '¥', deliveryFee: 0, addresses: [], wechatQr: '', alipayQr: '', wechatId: '', alipayId: '', pickup: true, inventory: {} };
 
@@ -394,8 +394,12 @@ async function pushRows() {
     for (let i = 0; i < mine.length; i += 300) {
       const chunk = mine.slice(i, i + 300);
       const recs = chunk.map(([, e]) => M[coll].get(e.id)).filter(Boolean);
-      if (recs.length) {
-        const { error } = await sb.from(coll).upsert(recs.map(MAP[coll].to));
+      // one row per upsert: a batched upsert unions the columns of all rows and
+      // NULL-fills the ones a row omits, which breaks NOT NULL columns we only send
+      // "when touched" (service, windows, photo, …). One row at a time, an omitted
+      // column keeps its default on insert and its stored value on update.
+      for (const r of recs) {
+        const { error } = await sb.from(coll).upsert(MAP[coll].to(r));
         if (error) throw error;
       }
       const ops = [];
