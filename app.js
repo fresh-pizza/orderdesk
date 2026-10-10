@@ -9,7 +9,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   bucket: 'photos',
 };
-const VERSION = '2.12.1';
+const VERSION = '2.12.2';
 const COLLS = ['menu', 'customers', 'orders', 'settings', 'purchases'];
 const DEFAULT_SETTINGS = { id: 'main', name: 'My kitchen', currency: '¥', deliveryFee: 0, addresses: [], wechatQr: '', alipayQr: '', wechatId: '', alipayId: '', pickup: true, inventory: {} };
 
@@ -659,17 +659,6 @@ function tile(label, value, hot) { return el('div', { class: 'tile' + (hot ? ' h
 function viewOrders(root) {
   const head = pageHead(['Orders', el('span', { class: 'h-date', text: new Date().toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }) })], '',
     el('button', { class: 'btn primary hide-m', type: 'button', onclick: () => go('new') }, '+ New order'));
-  const paidN = S.orders.filter(o => !isCancelled(o) && !isRefunded(o) && o.paid).length;
-  const unpaidN = S.orders.filter(isUnpaid).length;
-  const cancN = S.orders.filter(isCancelled).length;
-  const isDone = isComplete;
-  const doneN = S.orders.filter(isDone).length;
-  const openN = S.orders.filter(isOpenOrder).length;
-  const refN = S.orders.filter(isRefunded).length;
-  const filters = [['all', 'All'], ['open', `Open (${openN})`], ['paid', `Paid (${paidN})`], ['unpaid', `Unpaid (${unpaidN})`], ['done', `Completed (${doneN})`], ['cancelled', `Cancelled (${cancN})`], ['refunded', `Refunded (${refN})`]];
-  if (!filters.some(([k]) => k === S.ordFilter)) S.ordFilter = 'open';
-  const chips = el('div', { class: 'chips' }, filters.map(([k, label]) =>
-    el('button', { class: 'chip', type: 'button', 'aria-pressed': S.ordFilter === k, onclick: () => { S.ordFilter = k; S.ordLimit = 60; render(true); } }, label)));
   let seg = null;
   if (hasNight()) {
     const active = o => !isCancelled(o) && !isComplete(o);
@@ -678,9 +667,22 @@ function viewOrders(root) {
       el('button', { type: 'button', class: 'svc-btn ' + k, id: 'svc-' + k, 'aria-pressed': S.svc === k, title: 'Open orders', onclick: () => { S.svc = k; S.ordLimit = 60; render(true); } },
         el('span', { text: l }), el('b', { text: cnt(k) }))));
   } else S.svc = 'all';
-  root.append(el('div', { class: 'ord-sticky' }, head, chips, seg));
+  /* every chip below is scoped to whichever Day/Night segment is active above it; 'all' sees everything, as before */
+  const inSvc = o => S.svc === 'all' || orderSvc(o) === S.svc;
+  const isDone = isComplete;
+  const paidN = S.orders.filter(o => inSvc(o) && !isCancelled(o) && !isRefunded(o) && o.paid).length;
+  const unpaidN = S.orders.filter(o => inSvc(o) && isUnpaid(o)).length;
+  const cancN = S.orders.filter(o => inSvc(o) && isCancelled(o)).length;
+  const doneN = S.orders.filter(o => inSvc(o) && isDone(o)).length;
+  const openN = S.orders.filter(o => inSvc(o) && isOpenOrder(o)).length;
+  const refN = S.orders.filter(o => inSvc(o) && isRefunded(o)).length;
+  const filters = [['all', 'All'], ['open', `Open (${openN})`], ['paid', `Paid (${paidN})`], ['unpaid', `Unpaid (${unpaidN})`], ['done', `Completed (${doneN})`], ['cancelled', `Cancelled (${cancN})`], ['refunded', `Refunded (${refN})`]];
+  if (!filters.some(([k]) => k === S.ordFilter)) S.ordFilter = 'open';
+  const chips = el('div', { class: 'chips' }, filters.map(([k, label]) =>
+    el('button', { class: 'chip', type: 'button', 'aria-pressed': S.ordFilter === k, onclick: () => { S.ordFilter = k; S.ordLimit = 60; render(true); } }, label)));
+  root.append(el('div', { class: 'ord-sticky' }, head, seg, chips));
   const keep0 = { all: () => true, open: isOpenOrder, paid: o => !isCancelled(o) && !isRefunded(o) && o.paid, unpaid: isUnpaid, done: isDone, cancelled: isCancelled, refunded: isRefunded }[S.ordFilter];
-  const keep = o => keep0(o) && (S.svc === 'all' || orderSvc(o) === S.svc);
+  const keep = o => keep0(o) && inSvc(o);
   const list = S.orders.filter(keep).sort((a, b) => b.createdAt - a.createdAt);
   if (!list.length) {
     root.append(el('div', { class: 'empty' }, el('b', { text: S.orders.length ? 'Nothing here' : 'No orders yet' }),
