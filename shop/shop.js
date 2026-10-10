@@ -11,7 +11,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   phoneDomain: 'phone.orderdesk.app', // phone logins are stored as <digits>@this, no SMS involved
 };
-const SHOP_VERSION = '2.3.6';
+const SHOP_VERSION = '2.3.7';
 /* phones (WeChat especially) keep old copies of web pages; if a newer shop is online, reload it */
 (async function freshness() {
   try {
@@ -244,14 +244,22 @@ function ic(name, size = 18) {
 }
 const activeOrders = () => S.orders.filter(o => o.status !== 'done' && o.status !== 'cancelled');
 const unreadMsgs = () => S.msgs.filter(m => m.from_admin && !m.read_at).length;
+/* the business name on two lines: after an "&" if there is one, else at the space nearest the middle */
+function bizName(n) {
+  n = String(n).trim();
+  let i = n.indexOf('& ');
+  if (i < 0) { const mid = n.length / 2; let best = -1; for (let k = 0; k < n.length; k++) if (n[k] === ' ' && (best < 0 || Math.abs(k - mid) < Math.abs(best - mid))) best = k; i = best; } else i += 1;
+  const a = i < 0 ? n : n.slice(0, i).trim(), b = i < 0 ? '' : n.slice(i).trim();
+  return el('span', { class: 'biz-name', 'aria-label': n }, el('span', { class: 'l1', text: a }), b ? el('span', { class: 'l2', text: b }) : null);
+}
 function renderTop() {
   const sub = { checkout: ['Confirm order', 'menu'], details: ['Delivery details', 'checkout'] }[S.view];
   $('#top').replaceChildren(...(sub ? [
     el('button', { class: 'back', type: 'button', id: 'top-back', 'aria-label': 'Back', onclick: () => go(sub[1]) }, '‹'),
     el('div', { class: 'top-title', id: 'top-title', text: sub[0] })]
     : [el('button', { class: 'biz' + (S.biz.logo ? ' has-logo' : ''), type: 'button', onclick: () => go('menu') },
-        S.biz.logo ? el('img', { class: 'biz-logo', src: publicUrl(S.biz.logo), alt: S.biz.name || 'Order food' }) : null,
-        S.biz.logo ? null : (S.biz.name || 'Order food'))]));
+        S.biz.logo ? el('span', { class: 'biz-tile' }, el('img', { class: 'biz-logo', src: publicUrl(S.biz.logo), alt: '' })) : null,
+        bizName(S.biz.name || 'Order food'))]));
   document.title = S.biz.name ? `${S.biz.name} · Order` : 'Order food';
   const tabOf = { menu: 'menu', checkout: 'menu', details: 'menu', done: 'orders', orders: 'orders', me: 'me', chat: 'chat' }[S.view] || 'menu';
   const badge = { orders: activeOrders().length, chat: unreadMsgs() };

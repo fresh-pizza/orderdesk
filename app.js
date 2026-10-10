@@ -9,7 +9,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   bucket: 'photos',
 };
-const VERSION = '2.14.0';
+const VERSION = '2.15.0';
 const COLLS = ['menu', 'customers', 'orders', 'settings', 'purchases'];
 const DEFAULT_SETTINGS = { id: 'main', name: 'My kitchen', currency: '¥', deliveryFee: 0, addresses: [], wechatQr: '', alipayQr: '', wechatId: '', alipayId: '', pickup: true, inventory: {}, logo: '' };
 
@@ -212,7 +212,7 @@ const S = {
   ready: false, uid: null, email: '', signedIn: false,
   menu: [], customers: [], orders: [], purchases: [], settings: clone(DEFAULT_SETTINGS),
   loaded: { menu: true, customers: true, orders: true, config: true },
-  view: 'orders', statMode: 'days', statPick: null, ordFilter: 'open', ordLimit: 60, ordFrom: '', ordTo: '', calOpen: false, calMonth: '', calAnchor: '', svcSet: false, menuQ: '', menuCat: 'All', custQ: '', pickQ: '', pickCat: 'All',
+  view: 'orders', statMode: 'days', statPick: null, ordFilter: 'open', ordLimit: 60, ordFrom: '', ordTo: '', ordAll: false, calOpen: false, calMonth: '', calAnchor: '', svcSet: false, menuQ: '', menuCat: 'All', custQ: '', pickQ: '', pickCat: 'All',
   draft: null, blobUrls: new Map(), outbox: new Map(), svc: 'all', msgs: [], msgsOff: false, reviews: [], reviewsOff: false,
 };
 function refreshArrays(colls) {
@@ -617,12 +617,36 @@ $('#gear-desk').addEventListener('click', () => settingsModal());
 /* ---------- rendering ---------- */
 let raf = 0;
 function scheduleRender() { if (!raf) raf = requestAnimationFrame(() => { raf = 0; render(false); }); }
+/* the app's own icon: the logo from Settings, centred on a plain white square (light and dark both work). It is offered to the
+   phone / Edge when the app is added to the home screen; an icon already on a home screen does not change by itself. */
+let iconFor = null;
+async function applyAppIcon() {
+  const path = (S.settings && S.settings.logo) || '';
+  if (!path || path === iconFor) return;
+  iconFor = path;
+  try {
+    const img = new Image(); img.crossOrigin = 'anonymous'; img.src = photoUrl(path); await img.decode();
+    const mk = (size, pad) => {
+      const c = document.createElement('canvas'); c.width = c.height = size; const g = c.getContext('2d');
+      g.fillStyle = '#FFFFFF'; g.fillRect(0, 0, size, size);
+      const k = (size * (1 - 2 * pad)) / Math.max(img.naturalWidth, img.naturalHeight), w = img.naturalWidth * k, h = img.naturalHeight * k;
+      g.drawImage(img, (size - w) / 2, (size - h) / 2, w, h); return c.toDataURL('image/png');
+    };
+    const set = (rel, href) => { let l = document.querySelector(`link[rel="${rel}"]`); if (!l) { l = document.createElement('link'); l.rel = rel; document.head.append(l); } l.href = href; return l; };
+    set('apple-touch-icon', mk(180, .12));
+    const base = new URL('./', location.href).href;
+    const man = { name: 'Order Desk', short_name: 'Order Desk', description: 'Orders, menu and customers for the kitchen. Works offline.', start_url: base, scope: base, display: 'standalone', background_color: '#FFFFFF', theme_color: '#F2F4F1',
+      icons: [{ src: mk(192, .12), sizes: '192x192', type: 'image/png' }, { src: mk(512, .12), sizes: '512x512', type: 'image/png' }, { src: mk(512, .22), sizes: '512x512', type: 'image/png', purpose: 'maskable' }] };
+    set('manifest', URL.createObjectURL(new Blob([JSON.stringify(man)], { type: 'application/manifest+json' })));
+  } catch (_) { iconFor = null; }
+}
 function render(viewChanged) {
   if (!S.ready) return;
   if (!S.uid) { showLogin(); return; }
   if (S.notAdmin) { showStaffOnly(); return; }
   if (S.loginOpen) return; // the sign-in screen is up; don't cover it
   $('#app').hidden = false; $('#login').hidden = true;
+  applyAppIcon();
   renderNav();
   const main = $('#main');
   if (S.view === 'new') {
@@ -685,6 +709,7 @@ function calendarPop() {
   const hi = S.ordFrom && S.ordTo ? (S.ordFrom <= S.ordTo ? S.ordTo : S.ordFrom) : lo;
   const shift = n => { const d = new Date(cy, cm - 1 + n, 1); S.calMonth = d.getFullYear() + '-' + pad(d.getMonth() + 1); render(true); };
   const pick = iso => {
+    S.ordAll = false;
     if (S.calAnchor) { const a = S.calAnchor; S.calAnchor = ''; S.calOpen = false; S.ordFrom = a < iso ? a : iso; S.ordTo = a < iso ? iso : a; }
     else { S.calAnchor = iso; S.ordFrom = iso; S.ordTo = iso; }
     S.ordLimit = 60; render(true);
@@ -705,16 +730,19 @@ function calendarPop() {
       el('div', { class: 'cal-grid' }, cells),
       el('div', { class: 'cal-foot' },
         el('span', { text: S.calAnchor ? 'Now tap the last day.' : 'Tap a day, or tap two days for a range.' }),
-        (S.ordFrom || S.ordTo) ? el('button', { type: 'button', class: 'link', onclick: () => { S.calAnchor = ''; S.calOpen = false; S.ordFrom = ''; S.ordTo = ''; S.ordLimit = 60; render(true); } }, 'Clear') : null)));
+        el('span', { class: 'cal-links' },
+          (S.ordFrom || S.ordTo || S.ordAll) ? el('button', { type: 'button', class: 'link', onclick: () => { S.calAnchor = ''; S.calOpen = false; S.ordFrom = ''; S.ordTo = ''; S.ordAll = false; S.ordLimit = 60; render(true); } }, 'Today') : null,
+          S.ordAll ? null : el('button', { type: 'button', class: 'link', onclick: () => { S.calAnchor = ''; S.calOpen = false; S.ordFrom = ''; S.ordTo = ''; S.ordAll = true; S.ordLimit = 60; render(true); } }, 'All dates')))));
 }
 function dateButton() {
-  const has = S.ordFrom || S.ordTo;
+  const has = S.ordFrom || S.ordTo || S.ordAll;
+  const reset = () => { S.calOpen = false; S.calAnchor = ''; S.ordFrom = ''; S.ordTo = ''; S.ordAll = false; S.ordLimit = 60; render(true); };
   const open = () => { const base = (S.ordFrom || S.ordTo || bizDay(Date.now())); S.calMonth = base.slice(0, 7); S.calAnchor = ''; S.calOpen = !S.calOpen; render(true); };
-  const main = el('button', { type: 'button', class: 'h-date-btn' + (has ? ' set' : ''), 'aria-expanded': !!S.calOpen, 'aria-label': has ? 'Change date: ' + rangeText(S.ordFrom, S.ordTo) : 'Pick a date', onclick: open });
+  const main = el('button', { type: 'button', class: 'h-date-btn' + (has ? ' set' : ''), 'aria-expanded': !!S.calOpen, 'aria-label': has ? 'Change date: ' + (S.ordAll ? 'all dates' : rangeText(S.ordFrom, S.ordTo)) : 'Pick a date', onclick: open });
   main.innerHTML = CAL_ICON;
-  main.append(document.createTextNode(has ? rangeText(S.ordFrom, S.ordTo) : isoToDate(bizDay(Date.now())).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })));
+  main.append(document.createTextNode(S.ordAll ? 'All dates' : has ? rangeText(S.ordFrom, S.ordTo) : isoToDate(bizDay(Date.now())).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })));
   if (!has) return main;
-  const x = el('button', { type: 'button', class: 'h-date-x', 'aria-label': 'Clear date', onclick: () => { S.calOpen = false; S.calAnchor = ''; S.ordFrom = ''; S.ordTo = ''; S.ordLimit = 60; render(true); } });
+  const x = el('button', { type: 'button', class: 'h-date-x', 'aria-label': 'Back to today', onclick: reset });
   x.append(calIcon('M6 6l12 12M18 6L6 18', 14));
   return el('span', { class: 'h-date-grp set' }, main, x);
 }
@@ -745,7 +773,9 @@ function viewOrders(root) {
     el('button', { class: 'chip', type: 'button', 'aria-pressed': S.ordFilter === k, onclick: () => { S.ordFilter = k; S.ordLimit = 60; render(true); } }, label)));
   root.append(el('div', { class: 'ord-sticky' }, head, seg, chips, S.calOpen ? calendarPop() : null));
   const keep0 = { all: () => true, open: isOpenOrder, paid: o => !isCancelled(o) && !isRefunded(o) && o.paid, unpaid: isUnpaid, done: isDone, cancelled: isCancelled, refunded: isRefunded }[S.ordFilter];
-  const inRange = o => { if (!S.ordFrom && !S.ordTo) return true; const d = orderDay(o); return (!S.ordFrom || d >= S.ordFrom) && (!S.ordTo || d <= S.ordTo); };
+  /* no date chosen = today's business day (what the header shows); Open still lists every open order, so an unaccepted one from yesterday is never hidden */
+  const todayBiz = bizDay(Date.now());
+  const inRange = o => { if (S.ordAll) return true; if (!S.ordFrom && !S.ordTo) return S.ordFilter === 'open' || orderDay(o) === todayBiz; const d = orderDay(o); return (!S.ordFrom || d >= S.ordFrom) && (!S.ordTo || d <= S.ordTo); };
   const keep = o => keep0(o) && inSvc(o) && inRange(o);
   const list = S.orders.filter(keep).sort((a, b) => b.createdAt - a.createdAt);
   if (!list.length) {

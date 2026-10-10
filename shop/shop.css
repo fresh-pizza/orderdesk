@@ -8,7 +8,7 @@ body.shop{padding-bottom:calc(84px + env(safe-area-inset-bottom,0px))}
 .shop .top .tab[aria-current="page"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
 .shop main{max-width:760px;margin:0 auto;padding:14px 16px 24px}
 .shop .intro{color:var(--muted);font-size:14px;margin:0 0 12px}
-.shop .chips{position:sticky;top:calc(58px + env(safe-area-inset-top,0px));z-index:20;background:var(--bg);padding:6px 16px 8px;margin:0 -16px 10px;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
+.shop .chips{position:sticky;top:calc(var(--topH) - 6px + env(safe-area-inset-top,0px));z-index:20;background:var(--bg);padding:6px 16px 8px;margin:0 -16px 10px;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
 .shop .chips::-webkit-scrollbar{display:none}
 .shop .chip{flex:none}
 .dishes{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px}
@@ -113,7 +113,6 @@ body.shop{padding-bottom:calc(68px + env(safe-area-inset-bottom,0px))}
 
 /* checkout: tinted page and cards instead of all white, dark total card */
 body.shop[data-view="checkout"]{background:var(--ck-page)}
-body.shop[data-view="checkout"] .top{background:color-mix(in srgb,var(--ck-page) 92%,transparent)}
 [data-view="checkout"] .box{background:var(--ck-box);border-color:transparent;box-shadow:0 1px 3px rgba(20,30,25,.08);border-radius:16px;padding:16px}
 [data-view="checkout"] .box h2{display:flex;align-items:center;gap:8px;color:var(--ck-head);font-size:16.5px}
 .stepn{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--ck-step);color:#fff;font-size:12.5px;font-weight:700;font-family:var(--font-body)}
@@ -308,7 +307,6 @@ input[readonly]{background:var(--surface2)!important;color:var(--muted)}
 .shop .top .back{flex:none;width:34px;height:34px;border:0;background:none;font-size:36px;line-height:28px;color:var(--ink);padding:0 4px 6px 0;text-align:center}
 .shop .top .top-title{font-family:var(--font-display);font-weight:700;font-size:18px;margin-right:auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 body.shop[data-view="details"]{background:var(--ck-page)}
-body.shop[data-view="details"] .top{background:color-mix(in srgb,var(--ck-page) 92%,transparent)}
 body.shop.no-tabs[data-view="checkout"],body.shop.no-tabs[data-view="details"]{padding-bottom:calc(104px + env(safe-area-inset-bottom,0px))}
 [data-view="checkout"] main,[data-view="details"] main{padding-top:10px}
 .co-card{background:var(--ck-box);border-radius:16px;margin:0 0 10px;box-shadow:0 1px 3px rgba(20,30,25,.07);overflow:hidden}
@@ -410,10 +408,18 @@ body.shop.no-tabs[data-view="checkout"],body.shop.no-tabs[data-view="details"]{p
 .cf-go{width:100%;padding:13px;font-size:16px;font-weight:700;border-radius:12px}
 
 /* ===== 2.3: new look. left category rail, rectangular controls, more room, line icons, Messages tab ===== */
-:root{--r:14px;--r-s:10px;--topH:54px}
+:root{--r:14px;--r-s:10px;--topH:70px}
 body.shop{background:var(--bg)}
-.shop .top{background:var(--surface);backdrop-filter:none;-webkit-backdrop-filter:none;border-bottom:1px solid var(--line);padding:calc(12px + env(safe-area-inset-top,0px)) 16px 12px}
-.shop .top .biz{font-size:20px;font-weight:800;letter-spacing:-.02em}
+.shop .top{--top-a:#FFFFFF;--top-b:#F8F5EC;--top-sh:rgba(30,38,34,.14);--top-hi:rgba(255,255,255,.9);--top-tile:#FFFFFF;--top-tile-sh:rgba(30,38,34,.16);--top-2:var(--accent-ink);
+  background:linear-gradient(180deg,var(--top-a) 0%,var(--top-b) 100%);backdrop-filter:none;-webkit-backdrop-filter:none;border-bottom:0;border-radius:0 0 26px 26px;
+  box-shadow:0 8px 22px var(--top-sh),0 1px 0 var(--top-hi) inset;padding:calc(12px + env(safe-area-inset-top,0px)) 18px 12px 16px;gap:12px}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .shop .top{--top-a:#222B27;--top-b:#1A211E;--top-sh:rgba(0,0,0,.55);--top-hi:rgba(255,255,255,.07);--top-tile-sh:rgba(0,0,0,.4);--top-2:#F0AC1B}}
+:root[data-theme="dark"] .shop .top{--top-a:#222B27;--top-b:#1A211E;--top-sh:rgba(0,0,0,.55);--top-hi:rgba(255,255,255,.07);--top-tile-sh:rgba(0,0,0,.4);--top-2:#F0AC1B}
+.shop .top .biz{display:flex;align-items:center;gap:12px;font-size:17px;font-weight:800;line-height:1.15;letter-spacing:-.015em;white-space:normal;overflow:visible;text-overflow:clip}
+.shop .top .biz-tile{flex:none;width:46px;height:46px;border-radius:14px;background:var(--top-tile);box-shadow:0 2px 8px var(--top-tile-sh);display:flex;align-items:center;justify-content:center;overflow:hidden}
+.shop .top .biz-tile .biz-logo{height:auto;width:auto;max-width:38px;max-height:38px;object-fit:contain}
+.shop .top .biz-name{min-width:0;display:flex;flex-direction:column}
+.shop .top .biz-name .l2{color:var(--top-2)}
 .shop main{padding:16px 16px 24px}
 .page-h{font-size:24px;font-weight:800;letter-spacing:-.02em;margin:2px 0 16px}
 .ic{display:inline-grid;place-items:center;vertical-align:-.22em;flex:none}
@@ -515,3 +521,7 @@ body.shop[data-view="chat"]{padding-bottom:calc(160px + env(safe-area-inset-bott
 
 /* 2.3.2: refunded */
 .ostatus.refunded{color:var(--chilli)}
+
+/* the payment sheet always sits above everything in the menu */
+#modal{z-index:100}
+.dishes{position:relative;z-index:0;isolation:isolate}
