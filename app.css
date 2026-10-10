@@ -764,3 +764,32 @@ h2 .tag.kit{margin-left:8px;font-size:12px;vertical-align:3px}
 .seg3{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;background:var(--surface2);border-radius:10px;padding:4px}
 .seg3 button{border:0;background:none;border-radius:8px;padding:9px 4px;font-weight:600;color:var(--muted);font-size:14px}
 .seg3 button[aria-pressed="true"]{background:var(--surface);color:var(--ink);box-shadow:var(--shadow)}
+
+/* orders: new (not yet accepted) orders sit on a faded orange card */
+.ticket.t-new{background:color-mix(in srgb,var(--accent) 17%,var(--surface));border-color:color-mix(in srgb,var(--accent) 50%,var(--line))}
+.avatar.md{width:34px;height:34px;font-size:15px;flex:none}
+
+/* orders: tappable date + calendar dropdown */
+.h-date-btn,.h-date-grp{font-family:var(--font-body);font-size:14px;font-weight:500;margin-left:10px;vertical-align:middle;white-space:nowrap}
+.h-date-btn{display:inline-flex;align-items:center;gap:6px;background:var(--surface2);color:var(--ink);border:0;border-radius:99px;padding:5px 11px 5px 9px;cursor:pointer}
+.h-date-grp{display:inline-flex;align-items:center;background:color-mix(in srgb,var(--accent) 22%,var(--surface));border:1px solid var(--accent);border-radius:99px;color:var(--accent-ink);font-weight:600}
+.h-date-grp .h-date-btn{background:none;margin:0;padding:4px 4px 4px 9px;color:inherit;font-weight:600}
+.h-date-x{display:inline-flex;align-items:center;background:none;border:0;color:inherit;padding:4px 9px 4px 3px;cursor:pointer}
+.cal-ic{display:inline-flex}
+.cal-wrap{position:absolute;left:0;right:0;top:0;height:100vh;z-index:30}
+.cal-back{position:fixed;inset:0;background:rgba(10,14,12,.28)}
+.cal-pop{position:absolute;left:var(--px,16px);top:calc(var(--pt,24px) + 46px);width:min(362px,calc(100vw - 2 * var(--px,16px)));box-sizing:border-box;background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:14px 12px 12px;box-shadow:0 16px 40px rgba(20,28,24,.28)}
+.cal-head{display:flex;align-items:center;justify-content:space-between;padding:0 2px 8px}
+.cal-head b{font-family:var(--font-display);font-weight:800;font-size:19px;letter-spacing:-.01em}
+.cal-nav{width:36px;height:36px;border-radius:99px;border:0;background:var(--surface2);color:var(--ink);display:flex;align-items:center;justify-content:center;padding:0;cursor:pointer}
+.cal-dow,.cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr))}
+.cal-dow{text-align:center;font-size:12.5px;font-weight:600;color:var(--muted);padding-bottom:4px}
+.cal-grid{row-gap:2px}
+.cal-cell{height:40px;display:flex;align-items:center;justify-content:center}
+.cal-cell.in{background:color-mix(in srgb,var(--accent) 24%,var(--surface))}
+.cal-cell.in.s{border-radius:20px 0 0 20px}.cal-cell.in.e{border-radius:0 20px 20px 0}.cal-cell.in.s.e{border-radius:20px}
+.cal-day{width:36px;height:36px;border-radius:99px;border:0;background:none;padding:0;color:var(--ink);font:500 15px var(--font-body);cursor:pointer}
+.cal-day.other{color:var(--muted);opacity:.65}
+.cal-day.today{box-shadow:inset 0 0 0 1.5px var(--accent-ink)}
+.cal-day.edge{background:var(--accent);color:var(--on-accent);font-weight:700;opacity:1}
+.cal-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;border-top:1px solid var(--line);margin-top:8px;padding:10px 4px 0;font-size:13px;color:var(--muted)}

@@ -9,7 +9,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   bucket: 'photos',
 };
-const VERSION = '2.13.0';
+const VERSION = '2.14.0';
 const COLLS = ['menu', 'customers', 'orders', 'settings', 'purchases'];
 const DEFAULT_SETTINGS = { id: 'main', name: 'My kitchen', currency: '¥', deliveryFee: 0, addresses: [], wechatQr: '', alipayQr: '', wechatId: '', alipayId: '', pickup: true, inventory: {}, logo: '' };
 
@@ -212,7 +212,7 @@ const S = {
   ready: false, uid: null, email: '', signedIn: false,
   menu: [], customers: [], orders: [], purchases: [], settings: clone(DEFAULT_SETTINGS),
   loaded: { menu: true, customers: true, orders: true, config: true },
-  view: 'orders', statMode: 'days', statPick: null, ordFilter: 'open', ordLimit: 60, ordFrom: '', ordTo: '', menuQ: '', menuCat: 'All', custQ: '', pickQ: '', pickCat: 'All',
+  view: 'orders', statMode: 'days', statPick: null, ordFilter: 'open', ordLimit: 60, ordFrom: '', ordTo: '', calOpen: false, calMonth: '', calAnchor: '', svcSet: false, menuQ: '', menuCat: 'All', custQ: '', pickQ: '', pickCat: 'All',
   draft: null, blobUrls: new Map(), outbox: new Map(), svc: 'all', msgs: [], msgsOff: false, reviews: [], reviewsOff: false,
 };
 function refreshArrays(colls) {
@@ -659,15 +659,75 @@ function pageHead(title, sub, ...actions) {
 function tile(label, value, hot) { return el('div', { class: 'tile' + (hot ? ' hot' : '') }, el('b', { text: value }), el('span', { text: label })); }
 
 /* ---------- ORDERS ---------- */
+/* business day: an order belongs to the day it is FOR (its slot date), not the day it was typed in; one with no slot date
+   falls back to when it was placed, and anything placed before 03:00 still counts as the evening before */
+const BIZ_CUTOFF_H = 3;
+const bizDay = ms => isoDay(ms - BIZ_CUTOFF_H * 3600000);
+const orderDay = o => o.slotDate || bizDay(o.createdAt);
+/* which half of the day to open on: Day before 20:00 and from 03:00; Night from 20:00 until 03:00 */
+function autoSvc() { const h = new Date().getHours(); return h >= 20 || h < BIZ_CUTOFF_H ? 'night' : 'day'; }
+const isoToDate = iso => { const [y, m, d] = iso.split('-').map(Number); return new Date(y, m - 1, d); };
+const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const MONTH_FULL = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+function rangeText(from, to) {
+  const f = isoToDate(from || to), t = isoToDate(to || from);
+  const fs = f.getDate() + ' ' + MON[f.getMonth()];
+  if (+f === +t) return fs;
+  return f.getMonth() === t.getMonth() && f.getFullYear() === t.getFullYear() ? f.getDate() + ' – ' + t.getDate() + ' ' + MON[t.getMonth()] : fs + ' – ' + t.getDate() + ' ' + MON[t.getMonth()];
+}
+const CAL_ICON = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg>';
+function calIcon(pathD, size) { const s = el('span', { class: 'cal-ic' }); s.innerHTML = '<svg viewBox="0 0 24 24" width="' + size + '" height="' + size + '" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="' + pathD + '"/></svg>'; return s; }
+function calendarPop() {
+  const [cy, cm] = S.calMonth.split('-').map(Number);
+  const first = new Date(cy, cm - 1, 1), lead = (first.getDay() + 6) % 7, days = new Date(cy, cm, 0).getDate();
+  const rows = Math.ceil((lead + days) / 7), today = bizDay(Date.now());
+  const lo = S.ordFrom && S.ordTo ? (S.ordFrom <= S.ordTo ? S.ordFrom : S.ordTo) : (S.ordFrom || S.ordTo);
+  const hi = S.ordFrom && S.ordTo ? (S.ordFrom <= S.ordTo ? S.ordTo : S.ordFrom) : lo;
+  const shift = n => { const d = new Date(cy, cm - 1 + n, 1); S.calMonth = d.getFullYear() + '-' + pad(d.getMonth() + 1); render(true); };
+  const pick = iso => {
+    if (S.calAnchor) { const a = S.calAnchor; S.calAnchor = ''; S.calOpen = false; S.ordFrom = a < iso ? a : iso; S.ordTo = a < iso ? iso : a; }
+    else { S.calAnchor = iso; S.ordFrom = iso; S.ordTo = iso; }
+    S.ordLimit = 60; render(true);
+  };
+  const cells = [];
+  for (let i = 0; i < rows * 7; i++) {
+    const d = new Date(cy, cm - 1, i - lead + 1), iso = isoDay(+d), other = d.getMonth() !== cm - 1;
+    const inR = lo && iso >= lo && iso <= hi, edge = lo && (iso === lo || iso === hi);
+    cells.push(el('div', { class: 'cal-cell' + (inR ? ' in' : '') + (inR && iso === lo ? ' s' : '') + (inR && iso === hi ? ' e' : '') },
+      el('button', { type: 'button', class: 'cal-day' + (other ? ' other' : '') + (edge ? ' edge' : '') + (iso === today ? ' today' : ''), 'aria-label': d.getDate() + ' ' + MONTH_FULL[d.getMonth()], 'aria-pressed': !!inR, onclick: () => pick(iso), text: String(d.getDate()) })));
+  }
+  const nav = (label, path, n) => { const b = el('button', { type: 'button', class: 'cal-nav', 'aria-label': label, onclick: () => shift(n) }); b.append(calIcon(path, 18)); return b; };
+  return el('div', { class: 'cal-wrap' },
+    el('div', { class: 'cal-back', onclick: () => { S.calOpen = false; S.calAnchor = ''; render(true); } }),
+    el('div', { class: 'cal-pop', role: 'dialog', 'aria-label': 'Pick a date' },
+      el('div', { class: 'cal-head' }, nav('Previous month', 'M15 6l-6 6 6 6', -1), el('b', { text: MONTH_FULL[cm - 1] + ' ' + cy }), nav('Next month', 'M9 6l6 6-6 6', 1)),
+      el('div', { class: 'cal-dow' }, ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(t => el('span', { text: t }))),
+      el('div', { class: 'cal-grid' }, cells),
+      el('div', { class: 'cal-foot' },
+        el('span', { text: S.calAnchor ? 'Now tap the last day.' : 'Tap a day, or tap two days for a range.' }),
+        (S.ordFrom || S.ordTo) ? el('button', { type: 'button', class: 'link', onclick: () => { S.calAnchor = ''; S.calOpen = false; S.ordFrom = ''; S.ordTo = ''; S.ordLimit = 60; render(true); } }, 'Clear') : null)));
+}
+function dateButton() {
+  const has = S.ordFrom || S.ordTo;
+  const open = () => { const base = (S.ordFrom || S.ordTo || bizDay(Date.now())); S.calMonth = base.slice(0, 7); S.calAnchor = ''; S.calOpen = !S.calOpen; render(true); };
+  const main = el('button', { type: 'button', class: 'h-date-btn' + (has ? ' set' : ''), 'aria-expanded': !!S.calOpen, 'aria-label': has ? 'Change date: ' + rangeText(S.ordFrom, S.ordTo) : 'Pick a date', onclick: open });
+  main.innerHTML = CAL_ICON;
+  main.append(document.createTextNode(has ? rangeText(S.ordFrom, S.ordTo) : isoToDate(bizDay(Date.now())).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })));
+  if (!has) return main;
+  const x = el('button', { type: 'button', class: 'h-date-x', 'aria-label': 'Clear date', onclick: () => { S.calOpen = false; S.calAnchor = ''; S.ordFrom = ''; S.ordTo = ''; S.ordLimit = 60; render(true); } });
+  x.append(calIcon('M6 6l12 12M18 6L6 18', 14));
+  return el('span', { class: 'h-date-grp set' }, main, x);
+}
 function viewOrders(root) {
-  const head = pageHead(['Orders', el('span', { class: 'h-date', text: new Date().toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }) })], '',
+  const head = pageHead(['Orders', dateButton()], '',
     el('button', { class: 'btn primary hide-m', type: 'button', onclick: () => go('new') }, '+ New order'));
+  if (!S.svcSet && hasNight()) { S.svc = autoSvc(); S.svcSet = true; }
   let seg = null;
   if (hasNight()) {
     const active = o => !isCancelled(o) && !isComplete(o);
     const cnt = k => S.orders.filter(o => active(o) && (k === 'all' || orderSvc(o) === k)).length;
     seg = el('div', { class: 'svc-seg', role: 'group', 'aria-label': 'Day or night orders' }, [['all', 'All'], ['day', SVC.day], ['night', SVC.night]].map(([k, l]) =>
-      el('button', { type: 'button', class: 'svc-btn ' + k, id: 'svc-' + k, 'aria-pressed': S.svc === k, title: 'Open orders', onclick: () => { S.svc = k; S.ordLimit = 60; render(true); } },
+      el('button', { type: 'button', class: 'svc-btn ' + k, id: 'svc-' + k, 'aria-pressed': S.svc === k, title: 'Open orders', onclick: () => { S.svc = k; S.svcSet = true; S.ordLimit = 60; render(true); } },
         el('span', { text: l }), el('b', { text: cnt(k) }))));
   } else S.svc = 'all';
   /* every chip below is scoped to whichever Day/Night segment is active above it; 'all' sees everything, as before */
@@ -683,19 +743,9 @@ function viewOrders(root) {
   if (!filters.some(([k]) => k === S.ordFilter)) S.ordFilter = 'open';
   const chips = el('div', { class: 'chips' }, filters.map(([k, label]) =>
     el('button', { class: 'chip', type: 'button', 'aria-pressed': S.ordFilter === k, onclick: () => { S.ordFilter = k; S.ordLimit = 60; render(true); } }, label)));
-  const setRange = (from, to) => { S.ordFrom = from; S.ordTo = to; S.ordLimit = 60; render(true); };
-  const dateRow = el('div', { style: 'display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin:10px 16px 0' },
-    el('div', { class: 'field', style: 'margin:0' }, el('label', { for: 'ord-from', text: 'From' }),
-      el('input', { type: 'date', id: 'ord-from', value: S.ordFrom, onchange: e => setRange(e.target.value, S.ordTo) })),
-    el('div', { class: 'field', style: 'margin:0' }, el('label', { for: 'ord-to', text: 'To' }),
-      el('input', { type: 'date', id: 'ord-to', value: S.ordTo, onchange: e => setRange(S.ordFrom, e.target.value) })),
-    el('button', { class: 'btn small', type: 'button', onclick: () => setRange(isoDay(Date.now()), isoDay(Date.now())) }, 'Today'),
-    el('button', { class: 'btn small', type: 'button', onclick: () => setRange(isoDay(Date.now() - DAY), isoDay(Date.now() - DAY)) }, 'Yesterday'),
-    el('button', { class: 'btn small', type: 'button', onclick: () => setRange(isoDay(Date.now() - 6 * DAY), isoDay(Date.now())) }, 'Last 7 days'),
-    (S.ordFrom || S.ordTo) ? el('button', { class: 'link', type: 'button', onclick: () => setRange('', '') }, 'Clear dates') : null);
-  root.append(el('div', { class: 'ord-sticky' }, head, seg, chips), dateRow);
+  root.append(el('div', { class: 'ord-sticky' }, head, seg, chips, S.calOpen ? calendarPop() : null));
   const keep0 = { all: () => true, open: isOpenOrder, paid: o => !isCancelled(o) && !isRefunded(o) && o.paid, unpaid: isUnpaid, done: isDone, cancelled: isCancelled, refunded: isRefunded }[S.ordFilter];
-  const inRange = o => { if (!S.ordFrom && !S.ordTo) return true; const d = isoDay(o.createdAt); return (!S.ordFrom || d >= S.ordFrom) && (!S.ordTo || d <= S.ordTo); };
+  const inRange = o => { if (!S.ordFrom && !S.ordTo) return true; const d = orderDay(o); return (!S.ordFrom || d >= S.ordFrom) && (!S.ordTo || d <= S.ordTo); };
   const keep = o => keep0(o) && inSvc(o) && inRange(o);
   const list = S.orders.filter(keep).sort((a, b) => b.createdAt - a.createdAt);
   if (!list.length) {
@@ -869,7 +919,7 @@ function unreadFrom(clientId) { return clientId ? S.msgs.filter(m => m.client_id
 function ticket(o) {
   const sameDay = startOfDay(o.createdAt) === startOfDay(Date.now());
   const unread = unreadFrom(o.clientId);
-  return el('article', { class: 'ticket ' + (isCancelled(o) ? 't-cancelled' : isRefunded(o) ? 't-refunded' : o.paid ? 't-paid' : 't-unpaid'), 'data-id': o.id, tabindex: '0',
+  return el('article', { class: 'ticket ' + (isCancelled(o) ? 't-cancelled' : isRefunded(o) ? 't-refunded' : o.paid ? 't-paid' : 't-unpaid') + (isNew(o) && !isCancelled(o) && !isRefunded(o) ? ' t-new' : ''), 'data-id': o.id, tabindex: '0',
     onclick: () => orderSheet(o), onkeydown: e => { if (e.key === 'Enter') orderSheet(o); } },
     el('div', { class: 't-head' },
       el('span', { class: 't-no', text: orderNo(o.no) }),
@@ -882,7 +932,7 @@ function ticket(o) {
       payPill(o)),
     el('div', { class: 't-body' },
       stepText(o) ? el('div', { class: 'stepnow', text: stepText(o) }) : isNew(o) && !isCancelled(o) && o.source === 'shop' ? el('div', { class: 'stepnow new', text: 'New · accept or cancel' }) : null,
-      el('div', { class: 'who' }, whoAvatar(o, 'sm'), el('span', { class: 'who-nm' }, whoName(o), whoPhone(o) ? el('small', { text: whoPhone(o) }) : null)),
+      el('div', { class: 'who' }, whoAvatar(o, 'md'), el('span', { class: 'who-nm' }, whoName(o), whoPhone(o) ? el('small', { text: whoPhone(o) }) : null)),
       o.address ? el('div', { class: 'addr', text: o.address }) : null,
       slotText(o) ? el('div', { class: 'when', text: '🕒 ' + slotText(o) }) : null,
       el('ul', { class: 'lines' }, itemLines(o)),
