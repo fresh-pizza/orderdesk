@@ -9,7 +9,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   bucket: 'photos',
 };
-const VERSION = '2.12.0';
+const VERSION = '2.12.1';
 const COLLS = ['menu', 'customers', 'orders', 'settings', 'purchases'];
 const DEFAULT_SETTINGS = { id: 'main', name: 'My kitchen', currency: '¥', deliveryFee: 0, addresses: [], wechatQr: '', alipayQr: '', wechatId: '', alipayId: '', pickup: true, inventory: {} };
 
@@ -2326,7 +2326,7 @@ async function doRestore(data) {
 
 /* ---------- settings ---------- */
 /* ---------- push notifications (Web Push; sent by the Supabase Edge Function) ---------- */
-const VAPID_PUBLIC = 'BFmR-lPWQuVIyHH2l_dTcdRB_AAHQt5H6K3Ugedb7bsCITdKEDsRflul1eTryILeOEZroa8QG9IIQ433bZ0j8GA';
+const VAPID_PUBLIC = 'BMz6K6GyZ0qnUmZQL7WsnaykvuaSAZ5eZ30qbJ-MtP6aOFryDU_I1adq9wyIfTpirPPihTnAR_rr9LqnsQx79QU';
 function b64ToU8(s) { const pad = '='.repeat((4 - s.length % 4) % 4); const b = (s + pad).replace(/-/g, '+').replace(/_/g, '/'); const raw = atob(b); return Uint8Array.from([...raw].map(c => c.charCodeAt(0))); }
 const Push = {
   supported() { return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window && location.protocol !== 'file:'; },
