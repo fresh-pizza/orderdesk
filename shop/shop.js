@@ -11,7 +11,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   phoneDomain: 'phone.orderdesk.app', // phone logins are stored as <digits>@this, no SMS involved
 };
-const SHOP_VERSION = '2.3.4';
+const SHOP_VERSION = '2.3.5';
 /* phones (WeChat especially) keep old copies of web pages; if a newer shop is online, reload it */
 (async function freshness() {
   try {
@@ -337,7 +337,7 @@ function render() {
   const main = $('#main');
   main.replaceChildren();
   if (S.updateReady) main.append(el('div', { class: 'banner' }, el('span', { text: 'A new version is ready.' }),
-    el('button', { class: 'btn small primary', type: 'button', onclick: applyUpdate }, 'Update now')));
+    el('button', { class: 'btn small primary', type: 'button', id: 'update-btn', onclick: applyUpdate }, 'Update now')));
   if (!S.loaded) {
     main.append(el('div', { class: 'splash' }, el('div', { style: 'display:flex;flex-direction:column;align-items:center;gap:14px;text-align:center;padding:0 24px' },
       el('div', { text: S.loadErr || 'Loading the menu…' }),
@@ -1235,7 +1235,14 @@ async function loadShop() {
   }
 }
 let waitingSW = null, swUpdating = false;
-function applyUpdate() { swUpdating = true; if (waitingSW) waitingSW.postMessage('skip-waiting'); else location.reload(); }
+function applyUpdate() {
+  swUpdating = true;
+  const btn = $('#update-btn'); if (btn) { btn.disabled = true; btn.textContent = 'Updating…'; }
+  if (waitingSW) {
+    waitingSW.postMessage('skip-waiting');
+    setTimeout(() => { if (swUpdating) location.reload(); }, 3000);
+  } else location.reload();
+}
 function setupSW() {
   if (!('serviceWorker' in navigator) || location.protocol === 'file:') return;
   navigator.serviceWorker.register('sw.js').then(reg => {
