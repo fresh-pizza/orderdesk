@@ -11,7 +11,7 @@ const CFG = {
   key: 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q',
   phoneDomain: 'phone.orderdesk.app', // phone logins are stored as <digits>@this, no SMS involved
 };
-const SHOP_VERSION = '2.3.5';
+const SHOP_VERSION = '2.3.6';
 /* phones (WeChat especially) keep old copies of web pages; if a newer shop is online, reload it */
 (async function freshness() {
   try {
@@ -233,7 +233,10 @@ const ICONS = {
   shield: '<path d="M12 3l8 3v6c0 4.5-3.2 8-8 9-4.8-1-8-4.5-8-9V6z"/><path d="M8.5 12.2l2.5 2.5 4.5-5"/>',
   phone: '<path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v3a2 2 0 0 1-2 2A15 15 0 0 1 3 6a2 2 0 0 1 2-2z"/>',
   mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3.5 7l8.5 6 8.5-6"/>',
+  pin: '<path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.4"/>',
 };
+/* 13212348226 -> 132****8226, shown on the checkout card (the full number stays in the order) */
+const maskPhone = p => { const t = (p || '').trim(); let dg = t.replace(/\D/g, ''); if (dg.length === 13 && dg.startsWith('86')) dg = dg.slice(2); return dg.length >= 8 && !t.includes('@') ? dg.slice(0, 3) + '****' + dg.slice(-4) : t; };
 function ic(name, size = 18) {
   const s = el('span', { class: 'ic', 'aria-hidden': 'true' });
   s.innerHTML = `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICONS[name]}</svg>`;
@@ -314,7 +317,8 @@ function viewMe(root) {
   if (!me) {
     root.append(el('div', { class: 'box' }, el('b', { text: 'Not signed in' }),
       el('p', { class: 'fineprint', text: 'Sign in to see your orders and message us. You can also just order: we ask for your phone number or email at checkout.' }),
-      el('button', { class: 'btn primary big-btn', type: 'button', id: 'me-signin', onclick: () => authSheet(() => render()) }, 'Sign in')));
+      el('button', { class: 'btn primary big-btn', type: 'button', id: 'me-signin', onclick: () => authSheet(() => render()) }, 'Sign in')),
+      el('p', { class: 'fineprint', id: 'app-version', style: 'text-align:center', text: 'v' + SHOP_VERSION }));
     return;
   }
   root.append(
@@ -328,7 +332,8 @@ function viewMe(root) {
         me.kind === 'Guest' ? el('button', { class: 'btn primary', type: 'button', id: 'me-save', onclick: () => authSheet(() => render(), true) }, 'Save my account') : null,
         el('button', { class: 'btn danger', type: 'button', id: 'acct-out', onclick: signOutShop }, 'Sign out'))),
     el('button', { class: 'me-row', type: 'button', onclick: () => go('orders') },
-      el('span', { class: 'me-ic' }, ic('receipt', 22)), el('span', { class: 'me-mid' }, el('b', { text: 'My orders' }), el('small', { text: `${S.orders.length} order${S.orders.length === 1 ? '' : 's'}` })), el('span', { class: 'chev', text: '›' })));
+      el('span', { class: 'me-ic' }, ic('receipt', 22)), el('span', { class: 'me-mid' }, el('b', { text: 'My orders' }), el('small', { text: `${S.orders.length} order${S.orders.length === 1 ? '' : 's'}` })), el('span', { class: 'chev', text: '›' })),
+    el('p', { class: 'fineprint', id: 'app-version', style: 'text-align:center', text: 'v' + SHOP_VERSION }));
 }
 function go(v) { S.view = v; render(); window.scrollTo(0, 0); if (v === 'orders') loadOrders(); if (v === 'me') loadMsgs(); }
 function render() {
@@ -647,7 +652,7 @@ function viewCheckout(root) {
   if (d.slot && !list.includes(d.slot)) d.slot = '';
   const { sub, fee } = checkoutNumbers();
   const delivery = d.type === 'delivery';
-  const who = [(d.name || '').trim(), (d.phone || '').trim()].filter(Boolean).join('   ');
+  const who = [(d.name || '').trim(), maskPhone(d.phone)].filter(Boolean).join('   ');
   const needAddr = delivery && !d.address, needName = !(d.name || '').trim();
   S.checkoutClash = clash;
   const items = S.basket.map(l => {
@@ -663,7 +668,8 @@ function viewCheckout(root) {
         el('button', { type: 'button', id: 'co-' + k, 'aria-pressed': d.type === k, onclick: () => { d.type = k; store.set('draft', d); render(); } }, lbl))) : null,
       el('button', { class: 'co-info', type: 'button', id: 'co-info', onclick: () => go('details') },
         el('div', { class: 'co-info-main' },
-          el('b', { class: 'co-addr' + (needAddr ? ' need' : ''), id: 'co-addr', text: delivery ? (d.address || 'Choose delivery address') : (S.biz.name ? `Pick up at ${S.biz.name}` : 'Pick up at the kitchen') }),
+          el('b', { class: 'co-addr' + (needAddr ? ' need' : ''), id: 'co-addr' }, ic('pin', 18),
+            el('span', { text: delivery ? (d.address || 'Choose delivery address') : (S.biz.name ? `Pick up at ${S.biz.name}` : 'Pick up at the kitchen') })),
           el('div', { class: 'co-who' + (needName ? ' need' : ''), id: 'co-who', text: who || 'Add your name and phone' })),
         chevR()),
       el('div', { class: 'co-time' }, el('span', { class: 'co-lbl', text: delivery ? 'Delivery time' : 'Pickup time' }),
