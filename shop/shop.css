@@ -538,3 +538,8 @@ body.locked #bs-checkout,body.locked .qty button[aria-label="One more"],body.loc
 img.pv{background-size:cover;background-position:center;background-repeat:no-repeat}
 /* 2.3.19: letter avatar on Me while the picture loads */
 .me-letter{display:grid;place-items:center;aspect-ratio:1;font-size:22px;font-weight:700}
+/* 2.3.25: "Send OTP" inside the code box, on the right */
+.otp-field{position:relative}
+.otp-field input{width:100%;padding-right:120px}
+.otp-send{position:absolute;right:12px;top:50%;transform:translateY(-50%);font-size:13.5px;font-weight:600;white-space:nowrap}
+.otp-send:disabled{color:var(--muted);text-decoration:none;font-weight:500}
