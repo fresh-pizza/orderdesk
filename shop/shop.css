@@ -543,3 +543,18 @@ img.pv{background-size:cover;background-position:center;background-repeat:no-rep
 .otp-field input{width:100%;padding-right:120px}
 .otp-send{position:absolute;right:12px;top:50%;transform:translateY(-50%);font-size:13.5px;font-weight:600;white-space:nowrap}
 .otp-send:disabled{color:var(--muted);text-decoration:none;font-weight:500}
+/* 2.3.27: coupon box, under the Note */
+.co-coupon{display:flex;align-items:center;flex-wrap:wrap;gap:10px;padding:6px 14px;min-height:46px}
+.co-coupon .cp-ic{width:26px;height:26px;flex:none}
+.co-coupon input{flex:1;min-width:0;border:0;background:none;padding:11px 0;font-size:15px;outline:none;color:var(--ink);text-transform:uppercase}
+.co-coupon input::placeholder{color:var(--muted);opacity:.8;text-transform:none}
+.cp-apply{font-weight:700;font-size:14.5px}
+.cp-err{flex-basis:100%;margin:-4px 0 6px 36px;font-size:13px}
+.co-coupon.on{padding:10px 14px}
+.cp-mid{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.cp-mid b{font-size:14.5px;letter-spacing:.5px}
+.cp-mid small{color:var(--muted);font-size:12.5px}
+.cp-mid small.need{color:var(--accent-ink)}
+.cp-off{font-family:var(--font-mono);font-weight:700;color:var(--price)}
+.cp-row span:last-child{color:var(--price)}
+.co-was{display:block;font-size:12px;color:var(--muted);font-weight:400;text-align:right}
