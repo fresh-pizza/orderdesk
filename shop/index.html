@@ -10,19 +10,54 @@
 <meta name="description" content="Order desi food and pizza. Pick your dishes, delivery address and time.">
 <meta name="theme-color" content="#F2F4F1" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0F1311" media="(prefers-color-scheme: dark)">
+<!-- start connecting to the database while the shop's files download, not after -->
+<link rel="preconnect" href="https://qgoyengzjgsxpqkhhyjm.supabase.co" crossorigin>
+<link rel="dns-prefetch" href="https://qgoyengzjgsxpqkhhyjm.supabase.co">
+<script>
+/* ask the database for the menu straight away, while the shop's own files are still downloading.
+   The shop picks these answers up when it starts; if any of them fails, it simply asks again the normal way. */
+window.__odEarly = (function () {
+  try {
+    var U = 'https://qgoyengzjgsxpqkhhyjm.supabase.co/rest/v1/', K = 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q';
+    var h = { apikey: K };
+    try { // a signed-in customer asks as themselves (so they also see their own reviews); an expired sign-in is left to the shop
+      var a = JSON.parse(localStorage.getItem('od-shop-auth') || 'null');
+      if (a && a.access_token && a.expires_at * 1000 > Date.now() + 60000) h.Authorization = 'Bearer ' + a.access_token;
+    } catch (e) {}
+    var go = function (path, post) {
+      var hh = {}; for (var k in h) hh[k] = h[k];
+      if (post) hh['Content-Type'] = 'application/json';
+      return fetch(U + path, post ? { method: 'POST', headers: hh, body: '{}' } : { headers: hh })
+        .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
+    };
+    return { settings: go('settings?select=*&id=eq.business'), menu: go('menu?select=*&deleted=eq.false'),
+      reviews: go('reviews?select=*&order=created_at.desc&limit=500'), sales: go('rpc/dish_sales', true) };
+  } catch (e) { return null; }
+})();
+</script>
 <link rel="icon" href="../icon-192.png" type="image/png">
 <link rel="apple-touch-icon" href="../apple-touch-icon.png">
-<link rel="stylesheet" href="../app.css?v=2.3.28">
-<link rel="stylesheet" href="shop.css?v=2.3.28">
+<link rel="stylesheet" href="../app.css?v=2.3.29">
+<link rel="stylesheet" href="shop.css?v=2.3.29">
 </head>
 <body class="shop">
 <header class="top" id="top"></header>
-<main id="main" tabindex="-1"><div class="splash">Loading the menu…</div></main>
+<main id="main" tabindex="-1"><div class="splash" id="boot-splash">Loading the menu…</div></main>
+<script>
+/* if the shop's own files are still on their way after 8 seconds, say so and offer a retry
+   (the shop replaces this screen the moment it starts, so normally this never shows) */
+setTimeout(function () {
+  var s = document.getElementById('boot-splash'); if (!s) return;
+  s.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;gap:14px;text-align:center;padding:0 24px">'
+    + '<div>This is taking longer than usual.<br><small>Your connection may be slow.</small></div>'
+    + '<button type="button" class="btn primary" onclick="location.reload()">Try again</button></div>';
+}, 8000);
+</script>
 <div id="bar"></div>
 <nav id="tabs" aria-label="Sections"></nav>
 <div id="modal" hidden></div>
 <div id="toast" role="status" hidden></div>
 <script src="../supabase.js"></script>
-<script src="shop.js?v=2.3.28"></script>
+<script src="shop.js?v=2.3.29"></script>
 </body>
 </html>
