@@ -27,8 +27,10 @@ window.__odEarly = (function () {
     var go = function (path, post) {
       var hh = {}; for (var k in h) hh[k] = h[k];
       if (post) hh['Content-Type'] = 'application/json';
-      return fetch(U + path, post ? { method: 'POST', headers: hh, body: '{}' } : { headers: hh })
+      var pr = fetch(U + path, post ? { method: 'POST', headers: hh, body: '{}' } : { headers: hh })
         .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
+      pr.catch(function () {}); // a failure before shop.js is ready: shop.js handles it (asks again)
+      return pr;
     };
     return { settings: go('settings?select=*&id=eq.business'), menu: go('menu?select=*&deleted=eq.false'),
       reviews: go('reviews?select=*&order=created_at.desc&limit=500'), sales: go('rpc/dish_sales', true) };
@@ -37,8 +39,8 @@ window.__odEarly = (function () {
 </script>
 <link rel="icon" href="../icon-192.png" type="image/png">
 <link rel="apple-touch-icon" href="../apple-touch-icon.png">
-<link rel="stylesheet" href="../app.css?v=2.3.29">
-<link rel="stylesheet" href="shop.css?v=2.3.29">
+<link rel="stylesheet" href="../app.css?v=2.3.30">
+<link rel="stylesheet" href="shop.css?v=2.3.30">
 </head>
 <body class="shop">
 <header class="top" id="top"></header>
@@ -58,6 +60,6 @@ setTimeout(function () {
 <div id="modal" hidden></div>
 <div id="toast" role="status" hidden></div>
 <script src="../supabase.js"></script>
-<script src="shop.js?v=2.3.29"></script>
+<script src="shop.js?v=2.3.30"></script>
 </body>
 </html>
