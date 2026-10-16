@@ -536,6 +536,8 @@ body.locked #bs-checkout,body.locked .qty button[aria-label="One more"],body.loc
 .doc-short li{font-size:14px;line-height:1.45}
 /* 2.3.18: blurred photo preview under a photo that is still downloading */
 img.pv{background-size:cover;background-position:center;background-repeat:no-repeat}
+/* 2.3.33: a sold-out dish shows only that blurred copy — no photo is downloaded for it */
+.dish .img.pv-only{background-size:cover;background-position:center;background-repeat:no-repeat}
 /* 2.3.19: letter avatar on Me while the picture loads */
 .me-letter{display:grid;place-items:center;aspect-ratio:1;font-size:22px;font-weight:700}
 /* 2.3.25: "Send OTP" inside the code box, on the right */
