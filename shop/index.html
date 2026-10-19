@@ -19,7 +19,7 @@
 window.__odEarly = (function () {
   try {
     var U = 'https://qgoyengzjgsxpqkhhyjm.supabase.co/rest/v1/', K = 'sb_publishable_guwA3lmtAw61a5ks898qoQ_i07f7y3q';
-    var h = { apikey: K };
+    var h = { apikey: K }, ac = window.AbortController ? new AbortController() : null; // shop.js can cancel a hung request
     try { // a signed-in customer asks as themselves (so they also see their own reviews); an expired sign-in is left to the shop
       var a = JSON.parse(localStorage.getItem('od-shop-auth') || 'null');
       if (a && a.access_token && a.expires_at * 1000 > Date.now() + 60000) h.Authorization = 'Bearer ' + a.access_token;
@@ -27,20 +27,23 @@ window.__odEarly = (function () {
     var go = function (path, post) {
       var hh = {}; for (var k in h) hh[k] = h[k];
       if (post) hh['Content-Type'] = 'application/json';
-      var pr = fetch(U + path, post ? { method: 'POST', headers: hh, body: '{}' } : { headers: hh })
+      var o = post ? { method: 'POST', headers: hh, body: '{}' } : { headers: hh };
+      if (ac) o.signal = ac.signal;
+      var pr = fetch(U + path, o)
         .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
       pr.catch(function () {}); // a failure before shop.js is ready: shop.js handles it (asks again)
       return pr;
     };
     return { settings: go('settings?select=*&id=eq.business'), menu: go('menu?select=*&deleted=eq.false'),
-      reviews: go('reviews?select=*&order=created_at.desc&limit=500'), sales: go('rpc/dish_sales', true) };
+      reviews: go('reviews?select=*&order=created_at.desc&limit=500'), sales: go('rpc/dish_sales', true),
+      stop: function () { try { if (ac) ac.abort(); } catch (e) {} } };
   } catch (e) { return null; }
 })();
 </script>
 <link rel="icon" href="../icon-192.png" type="image/png">
 <link rel="apple-touch-icon" href="../apple-touch-icon.png">
-<link rel="stylesheet" href="../app.css?v=2.3.38">
-<link rel="stylesheet" href="shop.css?v=2.3.38">
+<link rel="stylesheet" href="../app.css?v=2.3.39">
+<link rel="stylesheet" href="shop.css?v=2.3.39">
 </head>
 <body class="shop">
 <header class="top" id="top"></header>
@@ -60,6 +63,6 @@ setTimeout(function () {
 <div id="modal" hidden></div>
 <div id="toast" role="status" hidden></div>
 <script src="../supabase.js"></script>
-<script src="shop.js?v=2.3.38"></script>
+<script src="shop.js?v=2.3.39"></script>
 </body>
 </html>
