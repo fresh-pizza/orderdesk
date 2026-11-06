@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="0; url=shop/">
+<title>Fresh Pizza &amp; Homemade Food</title>
+<link rel="icon" href="icon-192.png" type="image/png">
+</head>
+<body style="font:16px system-ui,sans-serif;padding:32px">
+<p><a href="shop/">Open the shop</a></p>
+<script>
+// an older app on this phone may still have an offline copy here: remove it, then go to the shop
+(async () => {
+  try { if ('serviceWorker' in navigator) for (const r of await navigator.serviceWorker.getRegistrations()) if (new URL(r.scope).pathname === location.pathname.replace(/[^/]*$/, '')) await r.unregister(); } catch (_) {}
+  location.replace('shop/');
+})();
+</script>
+</body>
+</html>
