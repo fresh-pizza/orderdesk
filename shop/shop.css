@@ -564,3 +564,12 @@ img.pv{background-size:cover;background-position:center;background-repeat:no-rep
 /* 2.4.0: "3 left" next to the price: red, small, calm */
 .left-tag{display:inline-block;margin-left:8px;color:var(--chilli,#C0392B);font-size:12px;font-weight:600;vertical-align:middle;white-space:nowrap}
 .dd-price-card .left-tag{display:block;margin:4px 0 0}
+
+/* 2.5.0 AI replies: visible label + typing dots */
+.bubble .b-ai{align-self:flex-start;font:700 10px/1 system-ui,sans-serif;letter-spacing:.04em;padding:2px 5px;border-radius:5px;background:var(--surface2,#eee);color:var(--muted,#666)}
+.bubble.typing{padding:10px 14px}
+.bubble.typing .dots{display:inline-flex;gap:4px}
+.bubble.typing .dots i{width:7px;height:7px;border-radius:50%;background:var(--muted,#888);opacity:.35;animation:tdot 1.2s infinite}
+.bubble.typing .dots i:nth-child(2){animation-delay:.2s}
+.bubble.typing .dots i:nth-child(3){animation-delay:.4s}
+@keyframes tdot{0%,60%,100%{opacity:.35;transform:none}30%{opacity:1;transform:translateY(-3px)}}
