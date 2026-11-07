@@ -573,3 +573,75 @@ img.pv{background-size:cover;background-position:center;background-repeat:no-rep
 .bubble.typing .dots i:nth-child(2){animation-delay:.2s}
 .bubble.typing .dots i:nth-child(3){animation-delay:.4s}
 @keyframes tdot{0%,60%,100%{opacity:.35;transform:none}30%{opacity:1;transform:translateY(-3px)}}
+
+/* ---------- 2.5.1 chat redesign: warm kitchen chat, logo on the kitchen's replies ---------- */
+body.shop[data-view="chat"]{
+  --ch-wall:#FBF6EA; --ch-dot:rgba(240,172,27,.16); --ch-them:#FFFFFF; --ch-them-ink:#1E2420; --ch-them-line:rgba(30,40,34,.06);
+  --ch-me-a:#FFC531; --ch-me-b:#FF8A3D; --ch-me-ink:#2A1600; --ch-bar:rgba(255,255,255,.92); --ch-field:#F4EFE3; --ch-ai:#7A4BD8;
+  background:var(--ch-wall);
+  background-image:radial-gradient(var(--ch-dot) 1.2px,transparent 1.3px),radial-gradient(var(--ch-dot) 1.2px,transparent 1.3px);
+  background-size:26px 26px;background-position:0 0,13px 13px;background-attachment:fixed;
+  height:auto;min-height:100%} /* page grows with the chat: top bar + header stay stuck, room under the last message works */
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) body.shop[data-view="chat"]{
+  --ch-wall:#121614; --ch-dot:rgba(240,172,27,.07); --ch-them:#1F2724; --ch-them-ink:#E8EDE9; --ch-them-line:rgba(255,255,255,.05);
+  --ch-me-a:#F6B92A; --ch-me-b:#F07A2E; --ch-me-ink:#1E1000; --ch-bar:rgba(23,29,26,.94); --ch-field:#232C28; --ch-ai:#B79BFF}}
+:root[data-theme="dark"] body.shop[data-view="chat"]{
+  --ch-wall:#121614; --ch-dot:rgba(240,172,27,.07); --ch-them:#1F2724; --ch-them-ink:#E8EDE9; --ch-them-line:rgba(255,255,255,.05);
+  --ch-me-a:#F6B92A; --ch-me-b:#F07A2E; --ch-me-ink:#1E1000; --ch-bar:rgba(23,29,26,.94); --ch-field:#232C28; --ch-ai:#B79BFF}
+
+/* header: logo, name, live status */
+.chat-top{justify-content:flex-start;gap:12px;margin:0 -16px;padding:10px 16px 12px;background:color-mix(in srgb,var(--ch-wall) 88%,transparent);
+  -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);border-bottom:1px solid var(--ch-them-line)}
+.ch-head-ava{position:relative;flex:none}
+.ch-head-ava .ch-ava{width:44px;height:44px;box-shadow:0 0 0 2px var(--accent),0 3px 10px rgba(240,140,30,.25)}
+.ch-online{position:absolute;right:-1px;bottom:-1px;width:12px;height:12px;border-radius:50%;background:#2ECC71;border:2px solid var(--ch-wall)}
+.ch-head-mid{display:flex;flex-direction:column;min-width:0}
+.ch-head-mid b{font-family:var(--font-display);font-size:17px;font-weight:700;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ch-status{color:var(--muted);font-size:12.5px;transition:color .2s}
+.ch-status.on{color:var(--leaf);font-weight:600}
+
+/* avatars */
+.ch-ava{display:grid;place-items:center;flex:none;width:30px;height:30px;border-radius:50%;overflow:hidden;background:#fff;
+  box-shadow:0 1px 4px rgba(0,0,0,.15)}
+.ch-ava img{width:100%;height:100%;object-fit:cover}
+.ch-ava b{font-family:var(--font-display);font-size:14px;color:var(--accent-ink)}
+.ch-ava.ghost{visibility:hidden;box-shadow:none}
+.ch-ava.big{width:72px;height:72px;box-shadow:0 0 0 3px var(--accent),0 8px 22px rgba(240,140,30,.3)}
+
+/* messages */
+.chat-list{gap:3px;padding:12px 0 0;min-height:55vh;background:none;border-radius:0;overflow:visible} /* the admin's boxed chat style (app.css) does not apply here */
+.chat-day{align-self:center;margin:12px 0 8px;font-size:11.5px;font-weight:600;color:var(--muted)}
+.chat-day span{display:inline-block;padding:3px 11px;border-radius:99px;background:var(--ch-them);box-shadow:0 1px 3px rgba(0,0,0,.06)}
+.ch-row{display:flex;align-items:flex-end;gap:8px;animation:chIn .22s ease-out}
+.ch-row.me{justify-content:flex-end}
+.ch-row.end{margin-bottom:9px}
+@keyframes chIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.ch-row .bubble{max-width:78%;padding:8px 12px 6px;border-radius:18px;font-size:15px;line-height:1.38;gap:3px;border:0}
+.ch-row .bubble.them{background:var(--ch-them);color:var(--ch-them-ink);box-shadow:0 1px 2px rgba(0,0,0,.06),0 0 0 1px var(--ch-them-line)}
+.ch-row .bubble.them.tail{border-bottom-left-radius:6px}
+.ch-row .bubble.me{background:linear-gradient(135deg,var(--ch-me-a),var(--ch-me-b));color:var(--ch-me-ink);box-shadow:0 2px 8px rgba(255,138,61,.28)}
+.ch-row .bubble.me.tail{border-bottom-right-radius:6px}
+.ch-row .bubble small{font-size:10.5px;opacity:.6;align-self:flex-end;font-variant-numeric:tabular-nums}
+.ch-row .bubble.me small{opacity:.7}
+.ch-row .bubble .b-ai{background:color-mix(in srgb,var(--ch-ai) 14%,transparent);color:var(--ch-ai);font:700 10.5px/1 var(--font-body);letter-spacing:.02em;padding:3px 7px;border-radius:99px}
+.ch-row .bubble .b-order{align-self:flex-start;font-family:var(--font-mono);font-size:11px;font-weight:600;padding:2px 7px;border-radius:6px;background:rgba(0,0,0,.08);opacity:1}
+.ch-row.typing .bubble{padding:12px 15px}
+.ch-row.typing .dots{display:inline-flex;gap:5px;padding:2px 0}
+.ch-row.typing .dots i{width:8px;height:8px;border-radius:50%;background:var(--accent);opacity:.35;animation:tdot 1.2s infinite}
+.ch-row.typing .dots i:nth-child(2){animation-delay:.2s}
+.ch-row.typing .dots i:nth-child(3){animation-delay:.4s}
+.ch-empty{display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center;padding:48px 16px 24px;color:var(--muted)}
+.ch-empty .ch-ava.big{margin-bottom:8px}
+.ch-empty b{font-family:var(--font-display);font-size:19px;color:var(--ink)}
+
+/* message box */
+.chat-bar{background:var(--ch-bar);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);border-top:1px solid var(--ch-them-line);padding:8px 10px 8px}
+.chat-row{gap:8px;align-items:flex-end}
+.chat-row textarea{min-height:44px;border-radius:22px;border:1.5px solid transparent;background:var(--ch-field);padding:11px 16px;line-height:1.35;transition:border-color .15s,background .15s}
+.chat-row textarea:focus{outline:none;border-color:var(--accent);background:var(--ch-them)}
+.ch-send{flex:none;display:grid;place-items:center;width:44px;height:44px;border-radius:50%;border:0;color:#fff;cursor:pointer;
+  background:linear-gradient(135deg,var(--ch-me-a),var(--ch-me-b));box-shadow:0 3px 10px rgba(255,138,61,.4);transition:transform .12s}
+.ch-send:active{transform:scale(.92)}
+.ch-send:disabled{opacity:.6}
+.ch-send svg{margin-left:-2px;margin-top:1px}
+.chat-about{padding:0 6px}
